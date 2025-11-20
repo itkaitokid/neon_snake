@@ -5,6 +5,14 @@ const ctx = canvas.getContext('2d');
 const GRID_SIZE = 20;
 const TILE_COUNT = canvas.width / GRID_SIZE; // 30x30 grid
 const MIN_OPEN_AREA = Math.max(10, Math.floor(TILE_COUNT / 3));
+const SCORE_GROWTH_BASE = 1.5;
+const SCORE_BASE_SCALE = 0.19;
+const HUNGER_INTERVAL = 5; // seconds without eating
+const HUNGER_SPEED_STEP = 1; // additional speed per interval
+const HUNGER_FIB_SEQUENCE = [1, 2, 3, 5];
+const SPECIAL_RESPAWN_INTERVAL = 10; // seconds between spawns
+const SPECIAL_LIFETIME = 5; // seconds a special food stays
+const WALL_BREAK_DURATION = 10; // seconds of wall breaking
 
 const COLORS = {
     snakeHead: '#00ff88',
@@ -19,7 +27,7 @@ let state = {
     snake: [],
     velocity: { x: 0, y: 0 },
     foods: [],
-    score: 0,
+    score: 0n,
     level: 1,
     isRunning: false,
     isPaused: false,
@@ -27,7 +35,15 @@ let state = {
     obstacles: [], // Array of {x, y}
     particles: [], // Array of particle objects
     autoPlay: false,
-    levelScoreSnapshot: 0
+    levelScoreSnapshot: 0,
+    timeSinceLastFood: 0,
+    speedBoost: 0,
+    previousUpdateTime: null,
+    hungerCount: 0,
+    specialFood: null,
+    specialFoodTimer: 0,
+    wallBreakTimer: 0,
+    specialSpawnTimer: 0
 };
 
 // Level Configuration
@@ -567,6 +583,22 @@ function buildInitialSegments(head, direction, obstacleKeys) {
     return segments;
 }
 
+function findFirstAvailablePlacement(obstacleKeys) {
+    for (let x = 0; x < TILE_COUNT; x++) {
+        for (let y = 0; y < TILE_COUNT; y++) {
+            const candidate = { x, y };
+            const placement = findStartPlacement(candidate, obstacleKeys);
+            if (placement) {
+                return {
+                    position: candidate,
+                    placement
+                };
+            }
+        }
+    }
+    return null;
+}
+
 // Removed initGame in favor of startNewGame/startLevelLogic split
 function resetSnake() {
     const obstacleKeys = buildObstacleKeySet();
@@ -614,11 +646,7 @@ function resetSnake() {
     }
 
     if (!spawnConfig) {
-        const fallbackPosition = { x: 5, y: 5 };
-        spawnConfig = {
-            position: fallbackPosition,
-            placement: findStartPlacement(fallbackPosition, obstacleKeys)
-        };
+        spawnConfig = findFirstAvailablePlacement(obstacleKeys);
     }
 
     const placement = spawnConfig.placement || findStartPlacement(spawnConfig.position, obstacleKeys);
@@ -886,6 +914,13 @@ function spawnFoodBatch() {
     const goal = getFoodGoal(state.level);
     const batchSize = getFoodBatchSize();
     state.foods = [];
+    state.timeSinceLastFood = 0;
+    state.speedBoost = 0;
+    state.previousUpdateTime = null;
+    state.hungerCount = 0;
+    state.specialFood = null;
+    state.specialFoodTimer = 0;
+    state.wallBreakTimer = 0;
     for (let i = 0; i < batchSize; i++) {
         spawnSingleFood({
             requireReachable: true,
@@ -1034,6 +1069,17 @@ function hasPath(start, target, options = {}) {
 function getAutoPlayMove() {
     if (!state.autoPlay) return null;
     if (!state.foods.length) return null;
+    
+    if (state.wallBreakTimer && state.wallBreakTimer > 0) {
+        const wallDir = findNearestWallDirection();
+        if (wallDir) return wallDir;
+    }
+    
+    const safeDirection = findSafeFoodDirection(true);
+    if (safeDirection && !isOppositeDirection(DIRECTION_VECTORS.find(d => d.key === safeDirection))) {
+        return safeDirection;
+    }
+    
     let direction = findPathDirection();
     if (direction && !isOppositeDirection(direction)) {
         return direction.key;
@@ -1111,6 +1157,202 @@ function findSafeFallbackDirection() {
     return bestDirection;
 }
 
+const SCORE_SUFFIXES = [
+    { value: 10n ** 33n, suffix: 'Dc' },
+    { value: 10n ** 30n, suffix: 'No' },
+    { value: 10n ** 27n, suffix: 'Oc' },
+    { value: 10n ** 24n, suffix: 'Sp' },
+    { value: 10n ** 21n, suffix: 'Sx' },
+    { value: 10n ** 18n, suffix: 'Qi' },
+    { value: 10n ** 15n, suffix: 'Q' },
+    { value: 10n ** 12n, suffix: 'T' },
+    { value: 10n ** 9n, suffix: 'B' },
+    { value: 10n ** 6n, suffix: 'M' },
+    { value: 10n ** 3n, suffix: 'K' }
+];
+
+function formatScore(value) {
+    const bigValue = BigInt(value);
+    for (let { value: threshold, suffix } of SCORE_SUFFIXES) {
+        if (bigValue >= threshold) {
+            const scaled = Number(bigValue) / Number(threshold);
+            return scaled.toFixed(2).replace(/\.?0+$/, '') + suffix;
+        }
+    }
+    return bigValue.toString();
+}
+
+function formatNumberWithCommas(value) {
+    return BigInt(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function getRainbowColor(time, offset = 0) {
+    const hue = (time / 15 + offset * 20) % 360;
+    return `hsl(${hue}, 100%, 65%)`;
+}
+
+function applyHungerPenalty() {
+    while ((state.timeSinceLastFood || 0) >= HUNGER_INTERVAL) {
+        state.timeSinceLastFood -= HUNGER_INTERVAL;
+        state.speedBoost = (state.speedBoost || 0) + HUNGER_SPEED_STEP;
+        const fibCount = HUNGER_FIB_SEQUENCE[Math.min(state.hungerCount, HUNGER_FIB_SEQUENCE.length - 1)];
+        state.hungerCount = Math.min(state.hungerCount + 1, HUNGER_FIB_SEQUENCE.length - 1);
+        for (let i = 0; i < fibCount; i++) {
+            spawnSingleFood({
+                requireReachable: true,
+                allowDeadEnd: shouldAllowDeadEndPlacement(state.foodEaten || 0)
+            });
+        }
+    }
+}
+
+function findSafeFoodDirection(includeSpecial = false) {
+    if (!state.snake.length) return null;
+    const head = state.snake[0];
+    let candidates = [...state.foods];
+    if (includeSpecial && state.specialFood) {
+        candidates.unshift({ ...state.specialFood, special: true });
+    }
+    const foods = candidates.sort((a, b) => computeWrapDistance(head, a) - computeWrapDistance(head, b));
+    for (let food of foods) {
+        const path = findPathToFood(food);
+        if (!path || path.length === 0) continue;
+        if (food.special || pathEnsuresEscape(path)) {
+            const direction = directionFromStep(head, path[0]);
+            if (direction) return direction;
+        }
+    }
+    return null;
+}
+
+function findPathToFood(target) {
+    if (!state.snake.length || !target) return null;
+    const head = state.snake[0];
+    const headKey = toKey(head.x, head.y);
+    const targetKey = toKey(target.x, target.y);
+    const queue = [{ ...head }];
+    const visited = new Set([headKey]);
+    const prev = new Map();
+    const blocked = buildBlockedSet(false);
+    
+    while (queue.length) {
+        const current = queue.shift();
+        const currentKey = toKey(current.x, current.y);
+        if (currentKey === targetKey) {
+            return reconstructFullPath(targetKey, prev);
+        }
+        for (let dir of DIRECTION_VECTORS) {
+            const neighbor = applyDirection(current, dir);
+            const key = toKey(neighbor.x, neighbor.y);
+            if (visited.has(key)) continue;
+            const isTarget = key === targetKey;
+            if (!isTarget && blocked.has(key)) continue;
+            visited.add(key);
+            prev.set(key, { from: currentKey, position: neighbor });
+            queue.push(neighbor);
+        }
+    }
+    return null;
+}
+
+function reconstructFullPath(targetKey, prev) {
+    const nodes = [];
+    let currentKey = targetKey;
+    while (prev.has(currentKey)) {
+        const info = prev.get(currentKey);
+        nodes.unshift({ ...info.position });
+        currentKey = info.from;
+    }
+    return nodes;
+}
+
+function pathEnsuresEscape(path) {
+    if (!path || !path.length) return false;
+    if (state.wallBreakTimer && state.wallBreakTimer > 0) return true;
+    const simulated = simulatePath(path);
+    if (!simulated || !simulated.length) return false;
+    const head = simulated[0];
+    const open = getOpenNeighborCountCustom(head, simulated);
+    return open > 0;
+}
+
+function simulatePath(path) {
+    const simSnake = state.snake.map(seg => ({ ...seg }));
+    for (let i = 0; i < path.length; i++) {
+        const step = path[i];
+        simSnake.unshift({ x: step.x, y: step.y });
+        if (i < path.length - 1) {
+            simSnake.pop();
+        }
+    }
+    return simSnake;
+}
+
+function getOpenNeighborCountCustom(head, snakeSegments) {
+    let count = 0;
+    for (let dir of DIRECTION_VECTORS) {
+        const nx = (head.x + dir.x + TILE_COUNT) % TILE_COUNT;
+        const ny = (head.y + dir.y + TILE_COUNT) % TILE_COUNT;
+        if (!isOccupiedCustom(nx, ny, snakeSegments)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+function isOccupiedCustom(x, y, snakeSegments) {
+    for (let obs of state.obstacles) {
+        if (obs.x === x && obs.y === y) return true;
+    }
+    for (let segment of snakeSegments) {
+        if (segment.x === x && segment.y === y) return true;
+    }
+    return false;
+}
+
+function directionFromStep(head, step) {
+    for (let dir of DIRECTION_VECTORS) {
+        const nx = (head.x + dir.x + TILE_COUNT) % TILE_COUNT;
+        const ny = (head.y + dir.y + TILE_COUNT) % TILE_COUNT;
+        if (nx === step.x && ny === step.y) {
+            return dir.key;
+        }
+    }
+    return null;
+}
+
+function updateSpecialTimers(deltaSeconds = 0) {
+    if (state.specialFood) {
+        state.specialFoodTimer -= deltaSeconds;
+        if (state.specialFoodTimer <= 0) {
+            state.specialFood = null;
+            state.specialFoodTimer = 0;
+            state.specialSpawnTimer = 0;
+        }
+    }
+    if (state.wallBreakTimer && state.wallBreakTimer > 0) {
+        state.wallBreakTimer = Math.max(state.wallBreakTimer - deltaSeconds, 0);
+    }
+}
+
+function maybeSpawnSpecialFood() {
+    if (state.specialFood) return;
+    if ((state.specialSpawnTimer || 0) < SPECIAL_RESPAWN_INTERVAL) return;
+    spawnSpecialFood();
+}
+
+function spawnSpecialFood() {
+    for (let attempt = 0; attempt < 200; attempt++) {
+        const x = Math.floor(Math.random() * TILE_COUNT);
+        const y = Math.floor(Math.random() * TILE_COUNT);
+        if (!isValidFoodSpot(x, y, { requireReachable: true, allowDeadEnd: true })) continue;
+        state.specialFood = { x, y };
+        state.specialFoodTimer = SPECIAL_LIFETIME;
+        state.specialSpawnTimer = 0;
+        return;
+    }
+}
+
 function getClosestFood(origin) {
     if (!origin || state.foods.length === 0) return null;
     let closest = null;
@@ -1123,6 +1365,56 @@ function getClosestFood(origin) {
         }
     }
     return closest;
+}
+
+function findNearestWallDirection() {
+    if (!state.snake.length || !state.obstacles.length) return null;
+    const head = state.snake[0];
+    let bestDir = null;
+    let bestDist = Infinity;
+    
+    for (let wall of state.obstacles) {
+        const dist = computeWrapDistance(head, wall);
+        if (dist < bestDist) {
+            const path = findPathToWall(head, wall);
+            if (path && path.length) {
+                const dir = directionFromStep(head, path[0]);
+                if (dir) {
+                    bestDist = dist;
+                    bestDir = dir;
+                }
+            }
+        }
+    }
+    return bestDir;
+}
+
+function findPathToWall(start, targetWall) {
+    const headKey = toKey(start.x, start.y);
+    const targetKey = toKey(targetWall.x, targetWall.y);
+    const queue = [{ ...start }];
+    const visited = new Set([headKey]);
+    const prev = new Map();
+    const blocked = buildBlockedSet(false);
+    blocked.delete(targetKey);
+    
+    while (queue.length) {
+        const current = queue.shift();
+        const currentKey = toKey(current.x, current.y);
+        if (currentKey === targetKey) {
+            return reconstructFullPath(targetKey, prev);
+        }
+        for (let dir of DIRECTION_VECTORS) {
+            const neighbor = applyDirection(current, dir);
+            const key = toKey(neighbor.x, neighbor.y);
+            if (visited.has(key)) continue;
+            if (blocked.has(key) && key !== targetKey) continue;
+            visited.add(key);
+            prev.set(key, { from: currentKey, position: neighbor });
+            queue.push(neighbor);
+        }
+    }
+    return null;
 }
 
 function buildBlockedSet(ignoreTail = false) {
@@ -1166,11 +1458,19 @@ function isOppositeDirection(dir) {
 
 function update(currentTime) {
     const config = getLevelConfig(state.level);
-    const speed = config.speed;
+    const speed = config.speed + (state.speedBoost || 0);
     
     if ((currentTime - state.lastRenderTime) / 1000 < 1 / speed) return false;
     
     state.lastRenderTime = currentTime;
+    
+    const deltaSeconds = state.previousUpdateTime ? (currentTime - state.previousUpdateTime) / 1000 : 0;
+    state.previousUpdateTime = currentTime;
+    state.timeSinceLastFood = (state.timeSinceLastFood || 0) + deltaSeconds;
+    state.specialSpawnTimer = (state.specialSpawnTimer || 0) + deltaSeconds;
+    updateSpecialTimers(deltaSeconds);
+    applyHungerPenalty();
+    maybeSpawnSpecialFood();
     
     const autoMove = getAutoPlayMove();
     if (autoMove) {
@@ -1204,30 +1504,44 @@ function update(currentTime) {
     state.snake.unshift(head);
 
     // Eat Food
-    if (willEat) {
+    let ateSpecial = false;
+    if (state.specialFood && head.x === state.specialFood.x && head.y === state.specialFood.y) {
+        ateSpecial = true;
+        state.specialFood = null;
+        state.specialFoodTimer = 0;
+    }
+
+    if (willEat || ateSpecial) {
         const config = getLevelConfig(state.level);
         const baseScore = 10;
         const multiplier = config.scoreMultiplier || 1;
-        const points = Math.round(baseScore * multiplier);
+        const levelFactor = Math.pow(SCORE_GROWTH_BASE, state.level);
+        const points = BigInt(Math.round(SCORE_BASE_SCALE * baseScore * multiplier * levelFactor));
         
         state.score += points;
-        scoreEl.innerText = state.score;
-        if (eatenFood) {
+        scoreEl.innerText = formatScore(state.score);
+        if (ateSpecial) {
+            state.wallBreakTimer = WALL_BREAK_DURATION;
+        }
+        if (!ateSpecial && eatenFood) {
             createParticles(eatenFood.x * GRID_SIZE, eatenFood.y * GRID_SIZE, COLORS.food);
             removeFood(eatenFood);
-        }
-        
+            
         state.foodEaten = (state.foodEaten || 0) + 1;
-        const foodGoal = getFoodGoal(state.level);
+            const foodGoal = getFoodGoal(state.level);
         
-        if (state.foodEaten >= foodGoal) {
+            if (state.foodEaten >= foodGoal) {
              state.foodEaten = 0; // Reset for next level
              levelUp();
-        } else if (state.foods.length < getFoodBatchSize()) {
-            spawnSingleFood({
-                requireReachable: true,
-                allowDeadEnd: shouldAllowDeadEndPlacement(state.foodEaten)
-            });
+            } else if (state.foods.length < getFoodBatchSize()) {
+                spawnSingleFood({
+                    requireReachable: true,
+                    allowDeadEnd: shouldAllowDeadEndPlacement(state.foodEaten)
+                });
+            }
+            state.timeSinceLastFood = 0;
+            state.speedBoost = 0;
+            state.previousUpdateTime = currentTime;
         }
     } else {
         state.snake.pop();
@@ -1246,8 +1560,14 @@ function checkCollision(pos, willEat = false) {
         }
     }
     // Obstacle collision
-    for (let obs of state.obstacles) {
+    for (let i = 0; i < state.obstacles.length; i++) {
+        const obs = state.obstacles[i];
         if (pos.x === obs.x && pos.y === obs.y) {
+            if (state.wallBreakTimer && state.wallBreakTimer > 0) {
+                state.obstacles.splice(i, 1);
+                i--;
+                continue;
+            }
             return true;
         }
     }
@@ -1262,7 +1582,7 @@ function levelUp() {
     setTimeout(() => {
         state.level++;
         loadLevel(state.level);
-        state.levelScoreSnapshot = state.score;
+        state.levelScoreSnapshot = Number(state.score);
         resetSnake();
         inputQueue = [];
         spawnFoodBatch();
@@ -1277,7 +1597,7 @@ function levelUp() {
 
 function gameOver() {
     state.isRunning = false;
-    finalScoreEl.innerText = state.score;
+    finalScoreEl.innerText = formatNumberWithCommas(state.score);
     gameOverScreen.classList.remove('hidden');
     gameOverScreen.classList.add('active');
 }
@@ -1344,6 +1664,10 @@ function draw() {
         entities.push({ type: 'snake', x: seg.x, y: seg.y, index: idx });
     });
     
+    if (state.specialFood) {
+        entities.push({ type: 'special', x: state.specialFood.x, y: state.specialFood.y });
+    }
+    
     // Sort by Y, then X
     entities.sort((a, b) => (a.y - b.y) || (a.x - b.x));
     
@@ -1352,15 +1676,16 @@ function draw() {
         if (e.type === 'wall') {
             // Wall: Tall block
             drawBlock(e.x, e.y, COLORS.wall, '#008fb3', 10);
-        } else if (e.type === 'food') {
+        } else if (e.type === 'food' || e.type === 'special') {
             // Food: Floating sphere-ish
             const bounce = Math.sin(Date.now() / 200) * 3;
             const px = e.x * GRID_SIZE + GRID_SIZE/2;
             const py = e.y * GRID_SIZE + GRID_SIZE/2 - 5 + bounce;
             
+            const color = e.type === 'special' ? '#ff8800' : COLORS.food;
             ctx.shadowBlur = 20;
-            ctx.shadowColor = COLORS.food;
-            ctx.fillStyle = COLORS.food;
+            ctx.shadowColor = color;
+            ctx.fillStyle = color;
             
             // Shadow on ground
             ctx.globalAlpha = 0.3;
@@ -1376,8 +1701,10 @@ function draw() {
             
         } else if (e.type === 'snake') {
             const isHead = e.index === 0;
-            const color = isHead ? COLORS.snakeHead : COLORS.snakeBody;
-            const shadow = isHead ? '#00b35f' : '#008f4b';
+            const rainbowActive = state.wallBreakTimer && state.wallBreakTimer > 0;
+            const baseColor = isHead ? COLORS.snakeHead : COLORS.snakeBody;
+            const color = rainbowActive ? getRainbowColor(Date.now(), e.index) : baseColor;
+            const shadow = rainbowActive ? color : (isHead ? '#00b35f' : '#008f4b');
             const height = isHead ? 6 : 4;
             
             drawBlock(e.x, e.y, color, shadow, height);
@@ -1538,20 +1865,20 @@ function startNewGame() {
         startLevelInput.value = startLevel;
     }
     
-    state.score = 0;
+    state.score = 0n;
     state.level = startLevel;
     startLevelLogic();
 }
 
 // Retry Function (Restart Current Level)
 function retryCurrentLevel() {
-    state.score = state.levelScoreSnapshot || 0;
-    scoreEl.innerText = state.score;
+    state.score = BigInt(state.levelScoreSnapshot || 0);
+    scoreEl.innerText = formatScore(state.score);
     startLevelLogic();
 }
 
 function startLevelLogic() {
-    state.levelScoreSnapshot = state.score;
+    state.levelScoreSnapshot = Number(state.score);
     state.foodEaten = 0;
     state.particles = [];
     inputQueue = [];
@@ -1568,7 +1895,7 @@ function startLevelLogic() {
     state.isPaused = false;
     state.lastRenderTime = 0;
     
-    scoreEl.innerText = state.score;
+    scoreEl.innerText = formatScore(state.score);
     levelEl.innerText = state.level;
     
     hideScreens();
