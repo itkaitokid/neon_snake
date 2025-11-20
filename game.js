@@ -4,6 +4,7 @@ const ctx = canvas.getContext('2d');
 // --- Constants & Config ---
 const GRID_SIZE = 20;
 const TILE_COUNT = canvas.width / GRID_SIZE; // 30x30 grid
+const MIN_OPEN_AREA = Math.max(10, Math.floor(TILE_COUNT / 3));
 
 const COLORS = {
     snakeHead: '#00ff88',
@@ -17,29 +18,366 @@ const COLORS = {
 let state = {
     snake: [],
     velocity: { x: 0, y: 0 },
-    food: { x: 0, y: 0 },
+    foods: [],
     score: 0,
     level: 1,
     isRunning: false,
     isPaused: false,
     lastRenderTime: 0,
     obstacles: [], // Array of {x, y}
-    particles: [] // Array of particle objects
+    particles: [], // Array of particle objects
+    autoPlay: false,
+    levelScoreSnapshot: 0
 };
 
 // Level Configuration
-const LEVELS = [
-    { speed: 8, obstacles: [], scoreMultiplier: 1 }, // Level 1
-    { speed: 9, obstacles: 'border', scoreMultiplier: 1.2 }, // Level 2
-    { speed: 10, obstacles: 'center_block', scoreMultiplier: 1.5 }, // Level 3
-    { speed: 11, obstacles: 'tunnel', scoreMultiplier: 1.8 }, // Level 4
-    { speed: 12, obstacles: 'random', scoreMultiplier: 2 }, // Level 5
-    { speed: 13, obstacles: 'cross', scoreMultiplier: 2.5 }, // Level 6
-    { speed: 14, obstacles: 'diag_lines', scoreMultiplier: 3 }, // Level 7
-    { speed: 15, obstacles: 'box_maze', scoreMultiplier: 3.5 }, // Level 8
-    { speed: 16, obstacles: 'grid_dots', scoreMultiplier: 4 }, // Level 9
-    { speed: 18, obstacles: 'final_boss', scoreMultiplier: 5 } // Level 10
+const TOTAL_LEVELS = 200;
+const BASE_PATTERN_POOL = [
+    'none',
+    'border',
+    'center_block',
+    'tunnel',
+    'random',
+    'cross',
+    'diag_lines',
+    'box_maze',
+    'grid_dots',
+    'spiral',
+    'plus_maze',
+    'final_boss'
 ];
+const LEVELS = generateLevelConfigs(TOTAL_LEVELS);
+
+function generateLevelConfigs(totalLevels) {
+    const configs = [];
+    for (let i = 1; i <= totalLevels; i++) {
+        const baseSpeed = 8;
+        const speed = Math.min(baseSpeed + Math.floor((i - 1) / 2), 28);
+        const scoreMultiplier = +(1 + (i - 1) * 0.05).toFixed(2);
+        configs.push({
+            speed,
+            scoreMultiplier,
+            patterns: buildPatternMix(i)
+        });
+    }
+    return configs;
+}
+
+function getLevelConfig(levelNumber) {
+    const index = Math.min(Math.max(levelNumber - 1, 0), LEVELS.length - 1);
+    return LEVELS[index];
+}
+
+function getFoodGoal(levelNumber) {
+    const mod = levelNumber % 10;
+    const tens = Math.floor(levelNumber / 10);
+    return Math.max(1, mod + tens);
+}
+
+function getFoodBatchSize(levelNumber = state.level) {
+    const goal = getFoodGoal(levelNumber);
+    return Math.max(1, Math.ceil(goal / 2));
+}
+
+function shouldAllowDeadEndPlacement(eatenCount = state.foodEaten || 0) {
+    const foodGoal = getFoodGoal(state.level);
+    return eatenCount + 1 >= foodGoal;
+}
+
+function createRNG(seed) {
+    let s = seed >>> 0;
+    return function () {
+        s = (s + 0x6D2B79F5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+function buildPatternMix(levelNumber) {
+    const rng = createRNG(levelNumber * 1337 + 17);
+    const mix = [];
+    const pool = [...BASE_PATTERN_POOL];
+    
+    const baseIndex = (levelNumber - 1) % pool.length;
+    mix.push(instantiatePattern(pool[baseIndex], levelNumber, rng));
+    pool.splice(baseIndex, 1);
+    
+    const mixSize = Math.min(4, 1 + Math.floor(levelNumber / 18) + (rng() > 0.6 ? 1 : 0));
+    for (let i = 0; i < mixSize && pool.length; i++) {
+        const pickIndex = Math.floor(rng() * pool.length);
+        const type = pool.splice(pickIndex, 1)[0];
+        mix.push(instantiatePattern(type, levelNumber, rng));
+    }
+
+    if (!mix.some(p => p.type === 'random')) {
+        mix.push(instantiatePattern('random', levelNumber, rng));
+    }
+
+    return mix.filter(Boolean);
+}
+
+function instantiatePattern(type, levelNumber, rng) {
+    switch (type) {
+        case 'border': {
+            const gateSize = levelNumber < 25 ? 1 : 2;
+            return {
+                type: 'border',
+                gateSize,
+                gatePositions: [
+                    Math.floor(TILE_COUNT / 2),
+                    Math.floor((TILE_COUNT / 4) + (rng() * TILE_COUNT / 4))
+                ]
+            };
+        }
+        case 'center_block':
+            return {
+                type: 'center_block',
+                size: 3 + (levelNumber % 4),
+                offset: 3 + Math.floor(rng() * 4)
+            };
+        case 'tunnel':
+            return {
+                type: 'tunnel',
+                offsets: [
+                    Math.floor(rng() * 10),
+                    Math.floor(rng() * 15)
+                ]
+            };
+        case 'random':
+            return {
+                type: 'random',
+                density: 0.01 + Math.min(0.06, (levelNumber / TOTAL_LEVELS) * 0.05 + rng() * 0.02)
+            };
+        case 'cross':
+            return {
+                type: 'cross',
+                thickness: 1 + (levelNumber % 2),
+                gap: Math.max(4, 8 - Math.floor(levelNumber / 10))
+            };
+        case 'diag_lines':
+            return {
+                type: 'diag_lines',
+                width: 2,
+                spacing: 5 + (levelNumber % 4)
+            };
+        case 'box_maze':
+            return {
+                type: 'box_maze',
+                ringStep: 4 + (levelNumber % 3),
+                gateSize: 1 + (levelNumber % 2)
+            };
+        case 'grid_dots':
+            return {
+                type: 'grid_dots',
+                spacing: 3 + (levelNumber % 3),
+                offset: Math.floor(rng() * 3)
+            };
+        case 'spiral':
+            return {
+                type: 'spiral',
+                spacing: 3 + (levelNumber % 2)
+            };
+        case 'plus_maze':
+            return {
+                type: 'plus_maze',
+                spacing: 5 + (levelNumber % 4)
+            };
+        case 'final_boss':
+            return {
+                type: 'final_boss',
+                chaosDensity: 0.04 + (levelNumber / TOTAL_LEVELS) * 0.03
+            };
+        case 'none':
+        default:
+            return { type: 'none' };
+    }
+}
+
+function createObstacleAdder(collection) {
+    const occupied = new Set();
+    return (x, y) => {
+        if (x < 0 || x >= TILE_COUNT || y < 0 || y >= TILE_COUNT) return;
+        const key = toKey(x, y);
+        if (occupied.has(key)) return false;
+        occupied.add(key);
+        collection.push({ x, y });
+        return true;
+    };
+}
+
+function applyPattern(spec = {}, addObstacle, rng) {
+    const type = spec.type || 'none';
+    const rand = rng || Math.random;
+    
+    if (type === 'combo' && Array.isArray(spec.patterns)) {
+        spec.patterns.forEach(child => applyPattern(child, addObstacle, rand));
+        return;
+    }
+    
+    switch (type) {
+        case 'none':
+            return;
+        case 'border': {
+            const gateSize = spec.gateSize ?? 0;
+            const gates = spec.gatePositions || [Math.floor(TILE_COUNT / 2)];
+            const skip = (i) => gateSize > 0 && gates.some(g => Math.abs(i - g) <= gateSize);
+            for (let i = 0; i < TILE_COUNT; i++) {
+                if (!skip(i)) {
+                    addObstacle(i, 0);
+                    addObstacle(i, TILE_COUNT - 1);
+                }
+            }
+            for (let i = 0; i < TILE_COUNT; i++) {
+                if (!skip(i)) {
+                    addObstacle(0, i);
+                    addObstacle(TILE_COUNT - 1, i);
+                }
+            }
+            break;
+        }
+        case 'center_block': {
+            const size = Math.max(2, spec.size || 4);
+            const offset = Math.max(2, spec.offset || 5);
+            const positions = [
+                { x: offset, y: offset },
+                { x: TILE_COUNT - offset - size, y: offset },
+                { x: offset, y: TILE_COUNT - offset - size },
+                { x: TILE_COUNT - offset - size, y: TILE_COUNT - offset - size }
+            ];
+            positions.forEach(pos => {
+                for (let dx = 0; dx < size; dx++) {
+                    for (let dy = 0; dy < size; dy++) {
+                        addObstacle(pos.x + dx, pos.y + dy);
+                    }
+                }
+            });
+            break;
+        }
+        case 'tunnel': {
+            const offsets = spec.offsets || [0, 0];
+            const walls = [
+                { x: 4 + offsets[0], y: 5, len: 10, dir: 'h' },
+                { x: 10 + offsets[1], y: 18, len: 12, dir: 'h' },
+                { x: 15, y: 4 + offsets[0], len: 12, dir: 'v' },
+                { x: 6, y: 12 + offsets[1], len: 9, dir: 'v' }
+            ];
+            walls.forEach(w => {
+                for (let i = 0; i < w.len; i++) {
+                    if (w.dir === 'h') {
+                        addObstacle((w.x + i) % TILE_COUNT, w.y % TILE_COUNT);
+                    } else {
+                        addObstacle(w.x % TILE_COUNT, (w.y + i) % TILE_COUNT);
+                    }
+                }
+            });
+            break;
+        }
+        case 'random': {
+            const density = spec.density || 0.02;
+            const count = spec.count || Math.max(5, Math.round(density * TILE_COUNT * TILE_COUNT));
+            let attempts = 0;
+            let placed = 0;
+            while (placed < count && attempts < count * 5) {
+                const x = Math.floor(rand() * TILE_COUNT);
+                const y = Math.floor(rand() * TILE_COUNT);
+                if (addObstacle(x, y)) {
+                    placed++;
+                }
+                attempts++;
+            }
+            break;
+        }
+        case 'cross': {
+            const center = Math.floor(TILE_COUNT / 2);
+            const thickness = spec.thickness || 1;
+            const padding = spec.gap || 4;
+            for (let offset = -thickness; offset <= thickness; offset++) {
+                for (let i = padding; i < TILE_COUNT - padding; i++) {
+                    addObstacle(i, center + offset);
+                    addObstacle(center + offset, i);
+                }
+            }
+            break;
+        }
+        case 'diag_lines': {
+            const spacing = spec.spacing || 6;
+            const width = spec.width || 2;
+            for (let i = 0; i < TILE_COUNT; i++) {
+                if (i % spacing < width) {
+                    addObstacle(i, i);
+                    addObstacle(TILE_COUNT - 1 - i, i);
+                }
+            }
+            break;
+        }
+        case 'box_maze': {
+            const step = spec.ringStep || 5;
+            const gateSize = spec.gateSize || 1;
+            for (let b = step; b < TILE_COUNT / 2 - 1; b += step) {
+                for (let i = b; i < TILE_COUNT - b; i++) {
+                    const skip = Math.abs(i - Math.floor(TILE_COUNT / 2)) <= gateSize;
+                    if (!skip) {
+                        addObstacle(i, b);
+                        addObstacle(i, TILE_COUNT - 1 - b);
+                        addObstacle(b, i);
+                        addObstacle(TILE_COUNT - 1 - b, i);
+                    }
+                }
+            }
+            break;
+        }
+        case 'grid_dots': {
+            const spacing = Math.max(2, spec.spacing || 4);
+            const offset = spec.offset || 2;
+            for (let x = offset; x < TILE_COUNT; x += spacing) {
+                for (let y = offset; y < TILE_COUNT; y += spacing) {
+                    addObstacle(x, y);
+                }
+            }
+            break;
+        }
+        case 'spiral': {
+            let min = spec.spacing || 3;
+            let max = TILE_COUNT - (spec.spacing || 3) - 1;
+            while (min <= max) {
+                for (let x = min; x <= max; x++) {
+                    addObstacle(x, min);
+                    addObstacle(x, max);
+                }
+                for (let y = min; y <= max; y++) {
+                    addObstacle(min, y);
+                    addObstacle(max, y);
+                }
+                min += (spec.spacing || 3);
+                max -= (spec.spacing || 3);
+            }
+            break;
+        }
+        case 'plus_maze': {
+            const spacing = spec.spacing || 6;
+            for (let x = spacing; x < TILE_COUNT - spacing; x += spacing) {
+                for (let y = spacing; y < TILE_COUNT - spacing; y += spacing) {
+                    addObstacle(x, y);
+                    addObstacle(x + 1, y);
+                    addObstacle(x - 1, y);
+                    addObstacle(x, y + 1);
+                    addObstacle(x, y - 1);
+                }
+            }
+            break;
+        }
+        case 'final_boss': {
+            applyPattern({ type: 'border', gateSize: 1 }, addObstacle, rand);
+            applyPattern({ type: 'cross', thickness: 1 }, addObstacle, rand);
+            const density = spec.chaosDensity || 0.05;
+            applyPattern({ type: 'random', density }, addObstacle, rand);
+            break;
+        }
+        default:
+            break;
+    }
+}
 
 // --- Elements ---
 const scoreEl = document.getElementById('score');
@@ -48,9 +386,24 @@ const finalScoreEl = document.getElementById('final-score');
 const startScreen = document.getElementById('start-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
 const levelUpScreen = document.getElementById('level-up-screen');
+const autoPlayBtn = document.getElementById('autoplay-btn');
 
 // --- Input Handling ---
 let inputQueue = []; // Buffer inputs to prevent self-collision on quick turns
+
+const DIRECTION_VECTORS = [
+    { key: 'ArrowUp', x: 0, y: -1 },
+    { key: 'ArrowDown', x: 0, y: 1 },
+    { key: 'ArrowLeft', x: -1, y: 0 },
+    { key: 'ArrowRight', x: 1, y: 0 }
+];
+
+const DIRECTION_MAP = DIRECTION_VECTORS.reduce((map, dir) => {
+    map[dir.key] = dir;
+    return map;
+}, {});
+
+const INITIAL_DIRECTION_PRIORITY = ['ArrowUp', 'ArrowRight', 'ArrowLeft', 'ArrowDown'];
 
 document.addEventListener('keydown', (e) => {
     if (!state.isRunning) return;
@@ -102,6 +455,11 @@ canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
 }, {passive: false});
 
+if (autoPlayBtn) {
+    autoPlayBtn.addEventListener('click', () => toggleAutoPlay());
+    updateAutoPlayButton();
+}
+
 function processInput() {
     if (inputQueue.length === 0) return;
 
@@ -129,42 +487,140 @@ function processInput() {
 
 // --- Game Logic ---
 
+function findStartPlacement(head, obstacleKeys) {
+    if (!head) return null;
+    for (let key of INITIAL_DIRECTION_PRIORITY) {
+        const dir = DIRECTION_MAP[key];
+        if (!dir) continue;
+        const segments = buildInitialSegments(head, dir, obstacleKeys);
+        if (segments) {
+            return {
+                segments,
+                velocity: { x: dir.x, y: dir.y }
+            };
+        }
+    }
+    return null;
+}
+
+function buildInitialSegments(head, direction, obstacleKeys) {
+    if (!direction) return null;
+    const nextHead = applyDirection(head, direction);
+    if (obstacleKeys.has(toKey(nextHead.x, nextHead.y))) {
+        return null;
+    }
+    const segments = [{ x: head.x, y: head.y }];
+    const tailDir = { x: -direction.x, y: -direction.y };
+    let current = { ...head };
+    for (let i = 1; i < 3; i++) {
+        current = applyDirection(current, tailDir);
+        const key = toKey(current.x, current.y);
+        if (obstacleKeys.has(key)) {
+            return null;
+        }
+        segments.push({ x: current.x, y: current.y });
+    }
+    return segments;
+}
+
 // Removed initGame in favor of startNewGame/startLevelLogic split
 function resetSnake() {
-    // Default start
-    let startX = 5;
-    let startY = 5;
+    const obstacleKeys = buildObstacleKeySet();
+    const tryPositions = [
+        { x: 5, y: 5 },
+        { x: Math.floor(TILE_COUNT / 2), y: Math.floor(TILE_COUNT / 2) }
+    ];
+    let spawnConfig = null;
+    let bestCandidate = null;
+    let bestArea = -1;
 
-    // Check if default position collides with obstacles (now that levels are loaded first)
-    // We check 3 vertical spots since snake is length 3
-    if (isPositionOccupied(startX, startY) || isPositionOccupied(startX, startY+1) || isPositionOccupied(startX, startY+2)) {
-        // Try center
-        if (!isPositionOccupied(15, 15) && !isPositionOccupied(15, 16) && !isPositionOccupied(15, 17)) {
-            startX = 15; startY = 15;
-        } else {
-             // Find any safe spot
-             let found = false;
-             for (let x = 2; x < TILE_COUNT - 2; x++) {
-                for (let y = 2; y < TILE_COUNT - 5; y++) {
-                    if (!isPositionOccupied(x, y) && !isPositionOccupied(x, y+1) && !isPositionOccupied(x, y+2)) {
-                        startX = x;
-                        startY = y;
-                        found = true;
-                        break;
-                    }
-                }
-                if (found) break;
+    const evaluateCandidate = (candidate) => {
+        const placement = findStartPlacement(candidate, obstacleKeys);
+        if (!placement) return false;
+        const area = getReachableAreaSize(candidate, obstacleKeys);
+        if (area > bestArea) {
+            bestArea = area;
+            bestCandidate = {
+                position: { ...candidate },
+                placement
+            };
+        }
+        if (area >= MIN_OPEN_AREA) {
+            spawnConfig = {
+                position: { ...candidate },
+                placement
+            };
+            return true;
+        }
+        return false;
+    };
+
+    tryPositions.some(evaluateCandidate);
+
+    if (!spawnConfig) {
+        for (let x = 1; x < TILE_COUNT - 1 && !spawnConfig; x++) {
+            for (let y = 1; y < TILE_COUNT - 3; y++) {
+                if (evaluateCandidate({ x, y })) break;
             }
         }
     }
 
-    state.snake = [
-        { x: startX, y: startY },
-        { x: startX, y: startY + 1 },
-        { x: startX, y: startY + 2 }
+    if (!spawnConfig && bestCandidate) {
+        spawnConfig = bestCandidate;
+    }
+
+    if (!spawnConfig) {
+        const fallbackPosition = { x: 5, y: 5 };
+        spawnConfig = {
+            position: fallbackPosition,
+            placement: findStartPlacement(fallbackPosition, obstacleKeys)
+        };
+    }
+
+    const placement = spawnConfig.placement || findStartPlacement(spawnConfig.position, obstacleKeys);
+    if (placement) {
+        state.snake = placement.segments;
+        state.velocity = placement.velocity;
+    } else {
+        const fallback = spawnConfig.position || { x: 5, y: 5 };
+        state.snake = [
+            { x: fallback.x, y: fallback.y },
+            { x: fallback.x, y: (fallback.y + 1) % TILE_COUNT },
+            { x: fallback.x, y: (fallback.y + 2) % TILE_COUNT }
     ];
     state.velocity = { x: 0, y: -1 };
+    }
     state.foodEaten = 0;
+}
+
+function buildObstacleKeySet() {
+    const keys = new Set();
+    state.obstacles.forEach(obs => keys.add(toKey(obs.x, obs.y)));
+    return keys;
+}
+
+function canPlaceSnakeSegments(x, y, obstacleKeys) {
+    return Boolean(findStartPlacement({ x, y }, obstacleKeys));
+}
+
+function getReachableAreaSize(start, obstacleKeys) {
+    if (!start) return 0;
+    const startKey = toKey(start.x, start.y);
+    if (obstacleKeys.has(startKey)) return 0;
+    const visited = new Set([startKey]);
+    const queue = [{ ...start }];
+    while (queue.length) {
+        const current = queue.shift();
+        for (let dir of DIRECTION_VECTORS) {
+            const neighbor = applyDirection(current, dir);
+            const key = toKey(neighbor.x, neighbor.y);
+            if (visited.has(key)) continue;
+            if (obstacleKeys.has(key)) continue;
+            visited.add(key);
+            queue.push(neighbor);
+        }
+    }
+    return visited.size;
 }
 
 function loadLevel(levelIndex) {
@@ -173,149 +629,247 @@ function loadLevel(levelIndex) {
     
     // Generate obstacles based on level
     state.obstacles = [];
-    const config = LEVELS[(levelIndex - 1) % LEVELS.length]; // Loop levels if exceeds
+    const config = getLevelConfig(levelIndex);
+    const patterns = (config.patterns && config.patterns.length)
+        ? config.patterns
+        : [{ type: config.obstacles || 'none' }];
     
-    // Simple Map Generation
-    if (config.obstacles === 'border') {
-        for (let i = 0; i < TILE_COUNT; i++) {
-            state.obstacles.push({x: i, y: 0}); // Top
-            state.obstacles.push({x: i, y: TILE_COUNT-1}); // Bottom
-            state.obstacles.push({x: 0, y: i}); // Left
-            state.obstacles.push({x: TILE_COUNT-1, y: i}); // Right
-        }
-    } else if (config.obstacles === 'center_block') {
-        // Level 3: 4 Corner Pillars
-        // 4x4 blocks near corners
-        const size = 4;
-        const offset = 5;
-        
-        const positions = [
-            {x: offset, y: offset}, // Top-Left
-            {x: TILE_COUNT - offset - size, y: offset}, // Top-Right
-            {x: offset, y: TILE_COUNT - offset - size}, // Bottom-Left
-            {x: TILE_COUNT - offset - size, y: TILE_COUNT - offset - size} // Bottom-Right
-        ];
+    const rng = createRNG(levelIndex * 7919);
+    const addObstacle = createObstacleAdder(state.obstacles);
+    
+    patterns.forEach(spec => applyPattern(spec, addObstacle, rng));
+    ensureFlowLanes(levelIndex);
+    ensureConnectivity(levelIndex);
+    enforceWallDensity();
+}
 
-        for (let pos of positions) {
-            for (let x = 0; x < size; x++) {
-                for (let y = 0; y < size; y++) {
-                    state.obstacles.push({x: pos.x + x, y: pos.y + y});
-                }
+function ensureFlowLanes(levelIndex) {
+    const lanes = buildLanePlan(levelIndex);
+    if (!lanes.length) return;
+    state.obstacles = state.obstacles.filter(obs => {
+        return !lanes.some(lane => {
+            if (lane.axis === 'row') {
+                return Math.abs(obs.y - lane.coord) <= lane.thickness;
             }
-        }
+            return Math.abs(obs.x - lane.coord) <= lane.thickness;
+        });
+    });
+}
 
-    } else if (config.obstacles === 'tunnel') {
-        // Level 4: Scattered Clusters (Maze-like chunks)
-        // Place a few horizontal and vertical walls randomly but fixed pattern for consistency
-        
-        const walls = [
-            // Horizontal walls
-            {x: 5, y: 5, len: 10, dir: 'h'},
-            {x: 15, y: 25, len: 10, dir: 'h'},
-            {x: 10, y: 15, len: 10, dir: 'h'},
-            
-            // Vertical walls
-            {x: 20, y: 5, len: 10, dir: 'v'},
-            {x: 5, y: 20, len: 8, dir: 'v'},
-            {x: 25, y: 15, len: 8, dir: 'v'}
-        ];
+function buildLanePlan(levelIndex) {
+    const lanes = [];
+    const mid = Math.floor(TILE_COUNT / 2);
+    const third = Math.floor(TILE_COUNT / 3);
+    const defaultThickness = 0; // inclusive
 
-        for (let w of walls) {
-            for (let i = 0; i < w.len; i++) {
-                if (w.dir === 'h') {
-                    state.obstacles.push({x: w.x + i, y: w.y});
-                } else {
-                    state.obstacles.push({x: w.x, y: w.y + i});
-                }
+    // Always ensure at least one horizontal and vertical lane
+    lanes.push({
+        axis: 'row',
+        coord: (mid + levelIndex) % TILE_COUNT,
+        thickness: defaultThickness
+    });
+    lanes.push({
+        axis: 'col',
+        coord: (mid + Math.floor(levelIndex / 2)) % TILE_COUNT,
+        thickness: defaultThickness
+    });
+
+    if (levelIndex === 29) {
+        lanes.push(
+            { axis: 'row', coord: mid, thickness: 1 },
+            { axis: 'col', coord: mid, thickness: 1 },
+            { axis: 'row', coord: third, thickness: 0 },
+            { axis: 'col', coord: TILE_COUNT - third - 1, thickness: 0 }
+        );
+    }
+
+    return lanes;
+}
+
+function ensureConnectivity(levelIndex) {
+    const blockedSet = new Set(state.obstacles.map(obs => toKey(obs.x, obs.y)));
+    const openCells = [];
+    for (let x = 0; x < TILE_COUNT; x++) {
+        for (let y = 0; y < TILE_COUNT; y++) {
+            const key = toKey(x, y);
+            if (!blockedSet.has(key)) {
+                openCells.push({ x, y });
             }
-        }
-    } else if (config.obstacles === 'random') {
-        for (let i = 0; i < 30; i++) {
-            state.obstacles.push({
-                x: Math.floor(Math.random() * TILE_COUNT),
-                y: Math.floor(Math.random() * TILE_COUNT)
-            });
-        }
-    } else if (config.obstacles === 'cross') {
-        // Level 6: Giant Cross
-        const center = Math.floor(TILE_COUNT / 2);
-        for (let i = 5; i < TILE_COUNT - 5; i++) {
-            state.obstacles.push({x: i, y: center});
-            state.obstacles.push({x: center, y: i});
-        }
-    } else if (config.obstacles === 'diag_lines') {
-        // Level 7: Diagonal Lines
-        for (let i = 0; i < TILE_COUNT; i++) {
-             if (i % 6 === 0 || i % 6 === 1) {
-                 state.obstacles.push({x: i, y: i});
-                 state.obstacles.push({x: TILE_COUNT - 1 - i, y: i});
-             }
-        }
-    } else if (config.obstacles === 'box_maze') {
-        // Level 8: Concentric boxes
-        const boxes = [5, 10];
-        for (let b of boxes) {
-             for (let i = b; i < TILE_COUNT - b; i++) {
-                 // Top & Bottom with gaps
-                 if (i !== Math.floor(TILE_COUNT/2)) {
-                    state.obstacles.push({x: i, y: b});
-                    state.obstacles.push({x: i, y: TILE_COUNT - 1 - b});
-                 }
-                 // Left & Right with gaps
-                 if (i !== Math.floor(TILE_COUNT/2)) {
-                    state.obstacles.push({x: b, y: i});
-                    state.obstacles.push({x: TILE_COUNT - 1 - b, y: i});
-                 }
-             }
-        }
-    } else if (config.obstacles === 'grid_dots') {
-        // Level 9: Grid of dots
-        for (let x = 2; x < TILE_COUNT; x += 4) {
-            for (let y = 2; y < TILE_COUNT; y += 4) {
-                state.obstacles.push({x, y});
-            }
-        }
-    } else if (config.obstacles === 'final_boss') {
-        // Level 10: Chaos (Random + Border + Cross)
-        // Border
-        for (let i = 0; i < TILE_COUNT; i++) {
-            state.obstacles.push({x: i, y: 0});
-            state.obstacles.push({x: i, y: TILE_COUNT-1});
-            state.obstacles.push({x: 0, y: i});
-            state.obstacles.push({x: TILE_COUNT-1, y: i});
-        }
-        // Random interior
-        for (let i = 0; i < 50; i++) {
-             let rx = Math.floor(Math.random() * (TILE_COUNT-2)) + 1;
-             let ry = Math.floor(Math.random() * (TILE_COUNT-2)) + 1;
-             state.obstacles.push({x: rx, y: ry});
         }
     }
+
+    if (!openCells.length) {
+        const mid = Math.floor(TILE_COUNT / 2);
+        const key = toKey(mid, mid);
+        blockedSet.delete(key);
+        openCells.push({ x: mid, y: mid });
+    }
+
+    const start = openCells[0];
+    const openTotal = openCells.length;
+    let reachable = floodFillReachable(start, blockedSet);
+    let guard = 0;
+
+    while (reachable.size < openTotal && guard < 50) {
+        const unreachable = openCells.find(cell => !reachable.has(toKey(cell.x, cell.y)));
+        if (!unreachable) break;
+        const path = findConnectionPath(unreachable, reachable, blockedSet);
+        if (!path || !path.length) break;
+        path.forEach(cell => blockedSet.delete(toKey(cell.x, cell.y)));
+        reachable = floodFillReachable(start, blockedSet);
+        guard++;
+    }
+
+    state.obstacles = Array.from(blockedSet).map(keyToCoord);
+}
+
+function enforceWallDensity(maxRatio = 0.5) {
+    const totalTiles = TILE_COUNT * TILE_COUNT;
+    const maxWalls = Math.floor(totalTiles * maxRatio);
+    if (state.obstacles.length <= maxWalls) return;
+    
+    const rng = createRNG(state.level * 997 + 71);
+    const decorated = state.obstacles.map(obs => ({
+        obs,
+        weight: rng()
+    }));
+    decorated.sort((a, b) => a.weight - b.weight);
+    state.obstacles = decorated.slice(0, maxWalls).map(entry => entry.obs);
+    
+    ensureRowColumnGaps();
+}
+
+function ensureRowColumnGaps() {
+    const blocked = new Set(state.obstacles.map(obs => toKey(obs.x, obs.y)));
+    for (let y = 0; y < TILE_COUNT; y++) {
+        let blockedCount = 0;
+        for (let x = 0; x < TILE_COUNT; x++) {
+            if (blocked.has(toKey(x, y))) blockedCount++;
+        }
+        if (blockedCount >= TILE_COUNT) {
+            const remover = state.obstacles.find(obs => obs.y === y);
+            if (remover) {
+                blocked.delete(toKey(remover.x, remover.y));
+            }
+        }
+    }
+    for (let x = 0; x < TILE_COUNT; x++) {
+        let blockedCount = 0;
+        for (let y = 0; y < TILE_COUNT; y++) {
+            if (blocked.has(toKey(x, y))) blockedCount++;
+        }
+        if (blockedCount >= TILE_COUNT) {
+            const remover = state.obstacles.find(obs => obs.x === x);
+            if (remover) {
+                blocked.delete(toKey(remover.x, remover.y));
+            }
+        }
+    }
+    state.obstacles = Array.from(blocked).map(keyToCoord);
+}
+
+function floodFillReachable(start, blockedSet) {
+    const startKey = toKey(start.x, start.y);
+    if (blockedSet.has(startKey)) {
+        return new Set();
+    }
+    const visited = new Set([startKey]);
+    const queue = [{ ...start }];
+    while (queue.length) {
+        const current = queue.shift();
+        for (let dir of DIRECTION_VECTORS) {
+            const neighbor = applyDirection(current, dir);
+            const key = toKey(neighbor.x, neighbor.y);
+            if (visited.has(key) || blockedSet.has(key)) continue;
+            visited.add(key);
+            queue.push(neighbor);
+        }
+    }
+    return visited;
+}
+
+function findConnectionPath(start, targetSet, blockedSet) {
+    const startKey = toKey(start.x, start.y);
+    const queue = [{ ...start }];
+    const visited = new Set([startKey]);
+    const parent = new Map();
+
+    while (queue.length) {
+        const current = queue.shift();
+        const currentKey = toKey(current.x, current.y);
+        if (targetSet.has(currentKey)) {
+            return reconstructPath(currentKey, parent);
+        }
+        for (let dir of DIRECTION_VECTORS) {
+            const neighbor = applyDirection(current, dir);
+            const key = toKey(neighbor.x, neighbor.y);
+            if (visited.has(key)) continue;
+            visited.add(key);
+            parent.set(key, currentKey);
+            queue.push(neighbor);
+        }
+    }
+    return null;
+}
+
+function reconstructPath(key, parent) {
+    const path = [];
+    let currentKey = key;
+    path.push(keyToCoord(currentKey));
+    while (parent.has(currentKey)) {
+        currentKey = parent.get(currentKey);
+        path.push(keyToCoord(currentKey));
+    }
+    return path;
 }
 
 // Helper to check if position is occupied
-function isPositionOccupied(x, y) {
+function isPositionOccupied(x, y, options = {}) {
+    const { ignoreTail = false } = options;
     // Check obstacles
     for (let obs of state.obstacles) {
         if (obs.x === x && obs.y === y) return true;
     }
     // Check snake
-    for (let segment of state.snake) {
+    const snakeSegments = ignoreTail ? state.snake.slice(0, -1) : state.snake;
+    for (let segment of snakeSegments) {
         if (segment.x === x && segment.y === y) return true;
     }
     return false;
 }
 
-function placeFood() {
+function spawnFoodBatch() {
+    const goal = getFoodGoal(state.level);
+    const batchSize = getFoodBatchSize();
+    state.foods = [];
+    for (let i = 0; i < batchSize; i++) {
+        spawnSingleFood({
+            requireReachable: true,
+            allowDeadEnd: shouldAllowDeadEndPlacement(state.foodEaten || 0)
+        });
+    }
+}
+
+function spawnSingleFood(options = {}) {
+    const settings = {
+        requireReachable: false,
+        allowDeadEnd: true,
+        relaxedDeadEnd: false,
+        relaxedReachable: false,
+        ...options
+    };
     let valid = false;
     let attempts = 0;
-    while (!valid && attempts < 500) {
-        const x = Math.floor(Math.random() * TILE_COUNT);
-        const y = Math.floor(Math.random() * TILE_COUNT);
+    const maxAttempts = 500;
+    while (!valid && attempts < maxAttempts) {
+        const candidate = {
+            x: Math.floor(Math.random() * TILE_COUNT),
+            y: Math.floor(Math.random() * TILE_COUNT)
+        };
         
-        if (!isPositionOccupied(x, y)) {
-            state.food = { x, y };
-            valid = true;
+        if (isValidFoodSpot(candidate.x, candidate.y, settings)) {
+            addFoodToState(candidate);
+        valid = true;
         }
         attempts++;
     }
@@ -324,25 +878,260 @@ function placeFood() {
     if (!valid) {
         for (let x = 0; x < TILE_COUNT; x++) {
              for (let y = 0; y < TILE_COUNT; y++) {
-                 if (!isPositionOccupied(x, y)) {
-                     state.food = { x, y };
-                     return;
-                 }
-             }
+                 if (isValidFoodSpot(x, y, settings)) {
+                     addFoodToState({ x, y });
+                     valid = true;
+                break;
+            }
+        }
+             if (valid) break;
+        }
+    }
+
+    if (!valid) {
+        if (!settings.allowDeadEnd && !settings.relaxedDeadEnd) {
+            console.warn('No turn-friendly food spot found. Relaxing dead-end constraint.');
+            spawnSingleFood({
+                ...settings,
+                allowDeadEnd: true,
+                relaxedDeadEnd: true
+            });
+            return;
+        }
+        if (settings.requireReachable && !settings.relaxedReachable) {
+            console.warn('No reachable food position found. Relaxing reachability constraint.');
+            spawnSingleFood({
+                ...settings,
+                requireReachable: false,
+                relaxedReachable: true
+            });
+            return;
         }
     }
 }
 
+function addFoodToState(pos) {
+    if (!pos) return;
+    const exists = state.foods.some(food => food.x === pos.x && food.y === pos.y);
+    if (!exists) {
+        state.foods.push({ x: pos.x, y: pos.y });
+    }
+}
+
+function removeFood(target) {
+    if (!target) return;
+    state.foods = state.foods.filter(food => !(food.x === target.x && food.y === target.y));
+}
+
+function getCollidingFood(pos) {
+    if (!pos) return null;
+    return state.foods.find(food => food.x === pos.x && food.y === pos.y) || null;
+}
+
+function isValidFoodSpot(x, y, options = {}) {
+    const { requireReachable = false, allowDeadEnd = true } = options;
+    if (isPositionOccupied(x, y)) return false;
+    if (state.foods.some(food => food.x === x && food.y === y)) return false;
+    if (state.snake.length && state.snake[0].x === x && state.snake[0].y === y) return false;
+    if (requireReachable && !isReachableFromSnake(x, y)) return false;
+    if (!allowDeadEnd && isDeadEnd(x, y)) return false;
+    return true;
+}
+
+function isReachableFromSnake(x, y) {
+    if (!state.snake.length) return true;
+    const head = state.snake[0];
+    return hasPath(head, { x, y }, { ignoreTail: true });
+}
+
+function getOpenNeighborCount(x, y) {
+    let count = 0;
+    for (let dir of DIRECTION_VECTORS) {
+        const nx = (x + dir.x + TILE_COUNT) % TILE_COUNT;
+        const ny = (y + dir.y + TILE_COUNT) % TILE_COUNT;
+        if (!isPositionOccupied(nx, ny)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+function isDeadEnd(x, y) {
+    return getOpenNeighborCount(x, y) <= 1;
+}
+
+function hasPath(start, target, options = {}) {
+    if (!start || !target) return false;
+    const ignoreTail = options.ignoreTail || false;
+    const blocked = buildBlockedSet(ignoreTail);
+    const startKey = toKey(start.x, start.y);
+    const targetKey = toKey(target.x, target.y);
+
+    const queue = [{ ...start }];
+    const visited = new Set([startKey]);
+
+    while (queue.length) {
+        const current = queue.shift();
+        const currentKey = toKey(current.x, current.y);
+        if (currentKey === targetKey) return true;
+
+        for (let dir of DIRECTION_VECTORS) {
+            const neighbor = applyDirection(current, dir);
+            const key = toKey(neighbor.x, neighbor.y);
+            if (visited.has(key)) continue;
+            if (key !== targetKey && blocked.has(key)) continue;
+            visited.add(key);
+            queue.push(neighbor);
+        }
+    }
+    return false;
+}
+
+function getAutoPlayMove() {
+    if (!state.autoPlay) return null;
+    if (!state.foods.length) return null;
+    let direction = findPathDirection();
+    if (direction && !isOppositeDirection(direction)) {
+        return direction.key;
+    }
+    direction = findSafeFallbackDirection();
+    if (direction && !isOppositeDirection(direction)) {
+        return direction.key;
+    }
+    return null;
+}
+
+function findPathDirection() {
+    if (!state.snake.length || state.foods.length === 0) return null;
+    const head = state.snake[0];
+    const target = getClosestFood(head);
+    if (!target) return null;
+    const headKey = toKey(head.x, head.y);
+    const targetKey = toKey(target.x, target.y);
+    const queue = [{ ...head }];
+    const visited = new Set([headKey]);
+    const prev = new Map();
+    const blocked = buildBlockedSet(false);
+    let foundKey = null;
+    
+    while (queue.length > 0) {
+        const current = queue.shift();
+        const currentKey = toKey(current.x, current.y);
+        if (currentKey === targetKey) {
+            foundKey = currentKey;
+                    break;
+                }
+        for (let dir of DIRECTION_VECTORS) {
+            const neighbor = applyDirection(current, dir);
+            const key = toKey(neighbor.x, neighbor.y);
+            if (visited.has(key)) continue;
+            const isTarget = key === targetKey;
+            if (!isTarget && blocked.has(key)) continue;
+            visited.add(key);
+            prev.set(key, { from: currentKey, dirKey: dir.key });
+            queue.push(neighbor);
+        }
+    }
+    
+    if (!foundKey) return null;
+    if (foundKey === headKey) return null;
+    
+    let stepKey = foundKey;
+    while (prev.has(stepKey)) {
+        const data = prev.get(stepKey);
+        if (data.from === headKey) {
+            return DIRECTION_VECTORS.find(d => d.key === data.dirKey) || null;
+        }
+        stepKey = data.from;
+    }
+    return null;
+}
+
+function findSafeFallbackDirection() {
+    if (!state.snake.length) return null;
+    const head = state.snake[0];
+    const target = getClosestFood(head) || head;
+    let bestDirection = null;
+    let bestScore = Infinity;
+    
+    for (let dir of DIRECTION_VECTORS) {
+        if (isOppositeDirection(dir)) continue;
+        const nextPos = applyDirection(head, dir);
+        if (isPositionOccupied(nextPos.x, nextPos.y)) continue;
+        const score = computeWrapDistance(nextPos, target);
+        if (score < bestScore) {
+            bestScore = score;
+            bestDirection = dir;
+        }
+    }
+    return bestDirection;
+}
+
+function getClosestFood(origin) {
+    if (!origin || state.foods.length === 0) return null;
+    let closest = null;
+    let bestScore = Infinity;
+    for (let food of state.foods) {
+        const score = computeWrapDistance(origin, food);
+        if (score < bestScore) {
+            bestScore = score;
+            closest = food;
+        }
+    }
+    return closest;
+}
+
+function buildBlockedSet(ignoreTail = false) {
+    const blocked = new Set();
+    state.obstacles.forEach(obs => blocked.add(toKey(obs.x, obs.y)));
+    const limit = ignoreTail ? Math.max(state.snake.length - 1, 1) : state.snake.length;
+    for (let i = 1; i < limit; i++) {
+        const segment = state.snake[i];
+        blocked.add(toKey(segment.x, segment.y));
+    }
+    return blocked;
+}
+
+function applyDirection(position, dir) {
+    return {
+        x: (position.x + dir.x + TILE_COUNT) % TILE_COUNT,
+        y: (position.y + dir.y + TILE_COUNT) % TILE_COUNT
+    };
+}
+
+function toKey(x, y) {
+    return `${x},${y}`;
+}
+
+function keyToCoord(key) {
+    const [x, y] = key.split(',').map(Number);
+    return { x, y };
+}
+
+function computeWrapDistance(a, b) {
+    if (!a || !b) return Infinity;
+    const dx = Math.min(Math.abs(a.x - b.x), TILE_COUNT - Math.abs(a.x - b.x));
+    const dy = Math.min(Math.abs(a.y - b.y), TILE_COUNT - Math.abs(a.y - b.y));
+    return dx + dy;
+}
+
+function isOppositeDirection(dir) {
+    if (state.snake.length <= 1) return false;
+    return dir.x === -state.velocity.x && dir.y === -state.velocity.y;
+}
+
 function update(currentTime) {
-    const levelConfigIndex = (state.level - 1) % LEVELS.length;
-    const config = LEVELS[levelConfigIndex];
-    // Increase speed every time we loop through all levels
-    const speedIncrease = Math.floor((state.level - 1) / LEVELS.length) * 2;
-    const speed = config.speed + speedIncrease;
+    const config = getLevelConfig(state.level);
+    const speed = config.speed;
     
     if ((currentTime - state.lastRenderTime) / 1000 < 1 / speed) return false;
     
     state.lastRenderTime = currentTime;
+    
+    const autoMove = getAutoPlayMove();
+    if (autoMove) {
+        inputQueue = [autoMove];
+    }
     
     processInput();
 
@@ -358,8 +1147,11 @@ function update(currentTime) {
     if (head.y < 0) head.y = TILE_COUNT - 1;
     if (head.y >= TILE_COUNT) head.y = 0;
 
+    const eatenFood = getCollidingFood(head);
+    const willEat = Boolean(eatenFood);
+
     // Check Death
-    if (checkCollision(head)) {
+    if (checkCollision(head, willEat)) {
         gameOver();
         return false;
     }
@@ -367,31 +1159,30 @@ function update(currentTime) {
     state.snake.unshift(head);
 
     // Eat Food
-    if (head.x === state.food.x && head.y === state.food.y) {
-        const config = LEVELS[(state.level - 1) % LEVELS.length];
+    if (willEat) {
+        const config = getLevelConfig(state.level);
         const baseScore = 10;
         const multiplier = config.scoreMultiplier || 1;
         const points = Math.round(baseScore * multiplier);
         
         state.score += points;
         scoreEl.innerText = state.score;
-        createParticles(head.x * GRID_SIZE, head.y * GRID_SIZE, COLORS.food);
-        placeFood();
+        if (eatenFood) {
+            createParticles(eatenFood.x * GRID_SIZE, eatenFood.y * GRID_SIZE, COLORS.food);
+            removeFood(eatenFood);
+        }
         
-        // Level Up Condition (e.g. every 100 points or fixed food count?)
-        // Let's use food count to make it consistent across levels
-        // Current logic uses score % 50 which triggers differently with multipliers
-        // Better: Every 5 items eaten? Or Score threshold?
-        // Let's stick to score but adjust threshold based on level multiplier
-        // Or simpler: Every 5 items.
-        
-        // Tracking food eaten in state would be better, but let's infer or add it.
-        // Adding 'foodEaten' to state.
         state.foodEaten = (state.foodEaten || 0) + 1;
+        const foodGoal = getFoodGoal(state.level);
         
-        if (state.foodEaten >= 5) {
+        if (state.foodEaten >= foodGoal) {
              state.foodEaten = 0; // Reset for next level
              levelUp();
+        } else if (state.foods.length < getFoodBatchSize()) {
+            spawnSingleFood({
+                requireReachable: true,
+                allowDeadEnd: shouldAllowDeadEndPlacement(state.foodEaten)
+            });
         }
     } else {
         state.snake.pop();
@@ -400,9 +1191,11 @@ function update(currentTime) {
     return true;
 }
 
-function checkCollision(pos) {
+function checkCollision(pos, willEat = false) {
     // Self collision
-    for (let i = 0; i < state.snake.length; i++) {
+    const snakeLength = state.snake.length;
+    const limit = willEat ? snakeLength : Math.max(snakeLength - 1, 0);
+    for (let i = 0; i < limit; i++) {
         if (pos.x === state.snake[i].x && pos.y === state.snake[i].y) {
             return true;
         }
@@ -424,8 +1217,12 @@ function levelUp() {
     setTimeout(() => {
         state.level++;
         loadLevel(state.level);
+        state.levelScoreSnapshot = state.score;
         resetSnake();
         inputQueue = [];
+        spawnFoodBatch();
+        state.foodEaten = 0;
+        state.lastRenderTime = 0;
         
         levelUpScreen.classList.add('hidden');
         levelUpScreen.classList.remove('active');
@@ -493,7 +1290,9 @@ function draw() {
     });
     
     // Add Food
-    entities.push({ type: 'food', x: state.food.x, y: state.food.y });
+    state.foods.forEach(food => {
+        entities.push({ type: 'food', x: food.x, y: food.y });
+    });
     
     // Add Snake
     state.snake.forEach((seg, idx) => {
@@ -557,6 +1356,55 @@ function draw() {
 
     // Draw Particles (on top of everything)
     updateAndDrawParticles();
+    drawWrapHints();
+}
+
+function drawWrapHints() {
+    if (!state.snake.length) return;
+    const head = state.snake[0];
+    const margin = 3;
+    const size = GRID_SIZE * 0.5;
+    const color = 'rgba(0, 255, 136, 0.25)';
+    
+    ctx.fillStyle = color;
+    
+    const leftBlocked = state.obstacles.some(obs => obs.x === 0);
+    const rightBlocked = state.obstacles.some(obs => obs.x === TILE_COUNT - 1);
+    const topBlocked = state.obstacles.some(obs => obs.y === 0);
+    const bottomBlocked = state.obstacles.some(obs => obs.y === TILE_COUNT - 1);
+    
+    if (!leftBlocked) {
+        ctx.fillRect(
+            margin,
+            head.y * GRID_SIZE + (GRID_SIZE - size) / 2,
+            size,
+            size
+        );
+    }
+    if (!rightBlocked) {
+        ctx.fillRect(
+            canvas.width - size - margin,
+            head.y * GRID_SIZE + (GRID_SIZE - size) / 2,
+            size,
+            size
+        );
+    }
+    if (!topBlocked) {
+        ctx.fillRect(
+            head.x * GRID_SIZE + (GRID_SIZE - size) / 2,
+            margin,
+            size,
+            size
+        );
+    }
+    if (!bottomBlocked) {
+        ctx.fillRect(
+            head.x * GRID_SIZE + (GRID_SIZE - size) / 2,
+            canvas.height - size - margin,
+            size,
+            size
+        );
+    }
 }
 
 // --- Particles System ---
@@ -624,10 +1472,26 @@ function showStartScreen() {
     startScreen.classList.add('active');
 }
 
+function toggleAutoPlay(forceValue) {
+    const nextValue = typeof forceValue === 'boolean' ? forceValue : !state.autoPlay;
+    state.autoPlay = nextValue;
+    updateAutoPlayButton();
+}
+
+function updateAutoPlayButton() {
+    if (!autoPlayBtn) return;
+    autoPlayBtn.innerText = `AUTO PLAY: ${state.autoPlay ? 'ON' : 'OFF'}`;
+    autoPlayBtn.classList.toggle('active', state.autoPlay);
+}
+
 // Init Function (Fresh Start)
 function startNewGame() {
     const startLevelInput = document.getElementById('start-level');
-    const startLevel = parseInt(startLevelInput.value) || 1;
+    const requestedLevel = parseInt(startLevelInput.value, 10) || 1;
+    const startLevel = Math.min(Math.max(requestedLevel, 1), TOTAL_LEVELS);
+    if (startLevelInput) {
+        startLevelInput.value = startLevel;
+    }
     
     state.score = 0;
     state.level = startLevel;
@@ -636,15 +1500,13 @@ function startNewGame() {
 
 // Retry Function (Restart Current Level)
 function retryCurrentLevel() {
-    // Keep state.level, reset score (or keep? let's reset score to 0 for this run)
-    // Usually in arcade, you lose score but keep level? 
-    // Or maybe resetting score to 0 is harsh if you're at level 10.
-    // Let's reset score to 0 to keep it simple (High Score logic is usually separate).
-    state.score = 0; 
+    state.score = state.levelScoreSnapshot || 0;
+    scoreEl.innerText = state.score;
     startLevelLogic();
 }
 
 function startLevelLogic() {
+    state.levelScoreSnapshot = state.score;
     state.foodEaten = 0;
     state.particles = [];
     inputQueue = [];
@@ -655,7 +1517,7 @@ function startLevelLogic() {
     // Then reset snake (so it can avoid obstacles)
     resetSnake();
     
-    placeFood();
+    spawnFoodBatch();
     
     state.isRunning = true;
     state.isPaused = false;

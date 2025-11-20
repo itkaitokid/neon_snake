@@ -24,11 +24,12 @@
             <div class="ui-layer">
                 <div id="start-screen" class="screen active">
                     <h1 class="glitch" data-text="NEON SNAKE">NEON SNAKE</h1>
-                    <p>Sử dụng phím mũi tên để di chuyển</p>
+                    <p>Điều khiển bằng phím mũi tên, WASD hoặc vuốt trên mobile</p>
+                    <p>Chinh phục hơn 100 màn với chướng ngại nâng cấp liên tục!</p>
                     
                     <div class="level-select-container">
                         <label for="start-level">START LEVEL:</label>
-                        <input type="number" id="start-level" min="1" max="10" value="1" class="level-input">
+                        <input type="number" id="start-level" min="1" max="200" value="1" class="level-input">
                     </div>
 
                     <button id="start-btn" class="btn">START GAME</button>
@@ -53,7 +54,8 @@
         
         <!-- Hướng dẫn / Footer nhỏ -->
         <div class="controls-hint">
-            ARROWS to Move • WASD supported
+            ARROWS / WASD • Swipe on Mobile • 200 Levels
+            <button id="autoplay-btn" class="btn small" type="button">AUTO PLAY: OFF</button>
         </div>
     </div>
 
