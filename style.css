@@ -1,0 +1,187 @@
+:root {
+    --bg-color: #050505;
+    --grid-color: #1a1a1a;
+    --snake-color: #00ff88;
+    --snake-shadow: #00b35f;
+    --food-color: #ff0055;
+    --food-shadow: #b3003b;
+    --wall-color: #00ccff;
+    --wall-shadow: #008fb3;
+    --text-color: #ffffff;
+    --ui-bg: rgba(10, 10, 15, 0.9);
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: 'Orbitron', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    perspective: 1200px;
+}
+
+.game-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    transform-style: preserve-3d;
+    transform: rotateX(10deg); /* Tilt the whole machine */
+}
+
+/* HUD PANEL (Top) - Separate from Canvas */
+.hud-panel {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 640px; /* Slightly wider than canvas */
+    background: #111;
+    padding: 15px 30px;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    border: 1px solid #333;
+    transform: translateZ(20px); /* Pop out */
+    box-sizing: border-box;
+}
+
+.title-small {
+    font-size: 1.5rem;
+    color: #333;
+    text-shadow: 0 0 2px #555;
+    letter-spacing: 2px;
+}
+
+.score-box, .level-box {
+    background: rgba(0, 255, 136, 0.1);
+    padding: 10px 20px;
+    border-radius: 6px;
+    border: 1px solid var(--snake-color);
+    color: var(--snake-color);
+    font-weight: bold;
+    font-size: 1.2rem;
+    box-shadow: 0 0 10px rgba(0, 255, 136, 0.2);
+    min-width: 120px;
+    text-align: center;
+}
+
+.game-container {
+    position: relative;
+    box-shadow: 0 0 50px rgba(0, 255, 136, 0.1);
+    border: 20px solid #111; /* Bezel */
+    border-radius: 10px;
+    background: #000;
+    transform: translateZ(0px);
+}
+
+canvas {
+    background-color: var(--bg-color);
+    display: block;
+    background-image: 
+        linear-gradient(var(--grid-color) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+    background-size: 20px 20px;
+    box-shadow: inset 0 0 50px #000; /* Inner vignette */
+}
+
+.ui-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 100;
+}
+
+/* Screens */
+.screen {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(10, 10, 15, 0.85);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    pointer-events: auto;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(5px);
+}
+
+.screen.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.screen.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Typography & Buttons */
+h1 {
+    font-size: 3rem;
+    margin-bottom: 1.5rem;
+    text-transform: uppercase;
+    letter-spacing: 5px;
+    color: #fff;
+    text-shadow: 0 0 15px var(--snake-glow);
+}
+
+.btn {
+    background: var(--snake-color);
+    color: #000;
+    border: none;
+    padding: 15px 40px;
+    font-size: 1.2rem;
+    font-family: 'Orbitron', sans-serif;
+    font-weight: bold;
+    cursor: pointer;
+    text-transform: uppercase;
+    margin-top: 20px;
+    box-shadow: 0 0 15px var(--snake-glow);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 25px var(--snake-glow);
+}
+
+.level-select-container {
+    margin-bottom: 20px;
+    font-size: 1.2rem;
+}
+
+.level-input {
+    background: rgba(0,0,0,0.5);
+    border: 2px solid var(--snake-color);
+    color: var(--snake-color);
+    padding: 5px 10px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.2rem;
+    width: 60px;
+    text-align: center;
+    margin-left: 10px;
+    outline: none;
+}
+
+.btn-group {
+    display: flex;
+    gap: 20px;
+}
+
+.controls-hint {
+    color: #555;
+    font-size: 0.9rem;
+    transform: translateZ(20px);
+    margin-top: 10px;
+}

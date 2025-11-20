@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Snake Game 3D</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <!-- Wrapper cho layout dọc -->
+    <div class="game-wrapper">
+        
+        <!-- Bảng điểm nằm tách biệt phía trên -->
+        <div class="hud-panel">
+            <div class="score-box">SCORE: <span id="score">0</span></div>
+            <div class="title-small">NEON SNAKE</div>
+            <div class="level-box">LEVEL: <span id="level">1</span></div>
+        </div>
+
+        <!-- Khung màn hình game -->
+        <div class="game-container">
+            <div class="ui-layer">
+                <div id="start-screen" class="screen active">
+                    <h1 class="glitch" data-text="NEON SNAKE">NEON SNAKE</h1>
+                    <p>Sử dụng phím mũi tên để di chuyển</p>
+                    
+                    <div class="level-select-container">
+                        <label for="start-level">START LEVEL:</label>
+                        <input type="number" id="start-level" min="1" max="10" value="1" class="level-input">
+                    </div>
+
+                    <button id="start-btn" class="btn">START GAME</button>
+                </div>
+
+                <div id="game-over-screen" class="screen hidden">
+                    <h1>GAME OVER</h1>
+                    <p>Final Score: <span id="final-score">0</span></p>
+                    <div class="btn-group">
+                        <button id="restart-btn" class="btn">RETRY LEVEL</button>
+                        <button id="home-btn" class="btn">MAIN MENU</button>
+                    </div>
+                </div>
+
+                <div id="level-up-screen" class="screen hidden">
+                    <h1>LEVEL COMPLETE!</h1>
+                    <p>Next Level Starting...</p>
+                </div>
+            </div>
+            <canvas id="gameCanvas" width="600" height="600"></canvas>
+        </div>
+        
+        <!-- Hướng dẫn / Footer nhỏ -->
+        <div class="controls-hint">
+            ARROWS to Move • WASD supported
+        </div>
+    </div>
+
+    <!-- Error Handler -->
+    <script>
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+            const container = document.querySelector('.game-wrapper');
+            let errorBox = document.getElementById('error-box');
+            if (!errorBox) {
+                errorBox = document.createElement('div');
+                errorBox.id = 'error-box';
+                errorBox.style.position = 'fixed';
+                errorBox.style.bottom = '0';
+                errorBox.style.left = '0';
+                errorBox.style.width = '100%';
+                errorBox.style.background = 'rgba(255, 0, 0, 0.8)';
+                errorBox.style.color = 'white';
+                errorBox.style.padding = '10px';
+                errorBox.style.fontSize = '12px';
+                errorBox.style.fontFamily = 'monospace';
+                errorBox.style.zIndex = '1000';
+                container.appendChild(errorBox);
+            }
+            errorBox.innerText = 'Error: ' + msg + ' at line ' + lineNo;
+            return false;
+        };
+    </script>
+    <script src="game.js"></script>
+</body>
+</html>
