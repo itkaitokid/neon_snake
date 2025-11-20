@@ -13,6 +13,7 @@ const HUNGER_FIB_SEQUENCE = [1, 2, 3, 5];
 const SPECIAL_RESPAWN_INTERVAL = 10; // seconds between spawns
 const SPECIAL_LIFETIME = 5; // seconds a special food stays
 const WALL_BREAK_DURATION = 10; // seconds of wall breaking
+const AUTO_RETRY_DELAY = 600; // ms before auto-restarting in auto play
 
 const COLORS = {
     snakeHead: '#00ff88',
@@ -45,6 +46,7 @@ let state = {
     wallBreakTimer: 0,
     specialSpawnTimer: 0
 };
+let autoRetryTimeout = null;
 
 // Level Configuration
 const TOTAL_LEVELS = 200;
@@ -601,6 +603,7 @@ function findFirstAvailablePlacement(obstacleKeys) {
 
 // Removed initGame in favor of startNewGame/startLevelLogic split
 function resetSnake() {
+    state.wallBreakTimer = Math.max(state.wallBreakTimer || 0, 5);
     const obstacleKeys = buildObstacleKeySet();
     const tryPositions = [
         { x: 5, y: 5 },
@@ -920,7 +923,6 @@ function spawnFoodBatch() {
     state.hungerCount = 0;
     state.specialFood = null;
     state.specialFoodTimer = 0;
-    state.wallBreakTimer = 0;
     for (let i = 0; i < batchSize; i++) {
         spawnSingleFood({
             requireReachable: true,
@@ -1310,6 +1312,19 @@ function isOccupiedCustom(x, y, snakeSegments) {
     return false;
 }
 
+function isSnakeOccupying(x, y, options = {}) {
+    const { includeTail = true } = options;
+    if (state.snake.length <= 1) return false;
+    const limit = includeTail ? state.snake.length : Math.max(state.snake.length - 1, 1);
+    for (let i = 1; i < limit; i++) {
+        const segment = state.snake[i];
+        if (segment.x === x && segment.y === y) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function directionFromStep(head, step) {
     for (let dir of DIRECTION_VECTORS) {
         const nx = (head.x + dir.x + TILE_COUNT) % TILE_COUNT;
@@ -1375,16 +1390,23 @@ function findNearestWallDirection() {
     
     for (let wall of state.obstacles) {
         const dist = computeWrapDistance(head, wall);
-        if (dist < bestDist) {
-            const path = findPathToWall(head, wall);
-            if (path && path.length) {
-                const dir = directionFromStep(head, path[0]);
-                if (dir) {
-                    bestDist = dist;
-                    bestDir = dir;
-                }
-            }
-        }
+        if (dist > bestDist) continue;
+        
+        const path = findPathToWall(head, wall);
+        if (!path || !path.length) continue;
+        
+        const nextStep = path[0];
+        if (!nextStep) continue;
+        if (isSnakeOccupying(nextStep.x, nextStep.y)) continue;
+        
+        const dirKey = directionFromStep(head, nextStep);
+        if (!dirKey) continue;
+        const dirObj = DIRECTION_VECTORS.find(d => d.key === dirKey);
+        if (!dirObj) continue;
+        if (isOppositeDirection(dirObj)) continue;
+        
+        bestDist = dist;
+        bestDir = dirKey;
     }
     return bestDir;
 }
@@ -1598,8 +1620,33 @@ function levelUp() {
 function gameOver() {
     state.isRunning = false;
     finalScoreEl.innerText = formatNumberWithCommas(state.score);
+    
+    if (state.autoPlay) {
+        scheduleAutoRetry();
+        return;
+    }
+    
     gameOverScreen.classList.remove('hidden');
     gameOverScreen.classList.add('active');
+}
+
+function scheduleAutoRetry() {
+    if (autoRetryTimeout) {
+        clearTimeout(autoRetryTimeout);
+    }
+    
+    gameOverScreen.classList.add('hidden');
+    gameOverScreen.classList.remove('active');
+    
+    autoRetryTimeout = setTimeout(() => {
+        autoRetryTimeout = null;
+        if (!state.autoPlay) {
+            gameOverScreen.classList.remove('hidden');
+            gameOverScreen.classList.add('active');
+            return;
+        }
+        retryCurrentLevel();
+    }, AUTO_RETRY_DELAY);
 }
 
 // --- Rendering ---
@@ -1729,6 +1776,27 @@ function draw() {
     // Draw Particles (on top of everything)
     updateAndDrawParticles();
     drawWrapHints();
+    drawPowerUpTimer();
+}
+
+function drawPowerUpTimer() {
+    if (!state.wallBreakTimer || state.wallBreakTimer <= 0) return;
+    
+    const timeLeft = Math.ceil(state.wallBreakTimer);
+    const text = `POWER UP: ${timeLeft}s`;
+    
+    ctx.save();
+    ctx.font = 'bold 20px Orbitron';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#ff0055';
+    
+    const scale = 1 + Math.sin(Date.now() / 120) * 0.08;
+    ctx.translate(canvas.width / 2, 40);
+    ctx.scale(scale, scale);
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
 }
 
 function drawWrapHints() {
@@ -1847,6 +1915,10 @@ function showStartScreen() {
 function toggleAutoPlay(forceValue) {
     const nextValue = typeof forceValue === 'boolean' ? forceValue : !state.autoPlay;
     state.autoPlay = nextValue;
+    if (!state.autoPlay && autoRetryTimeout) {
+        clearTimeout(autoRetryTimeout);
+        autoRetryTimeout = null;
+    }
     updateAutoPlayButton();
 }
 
