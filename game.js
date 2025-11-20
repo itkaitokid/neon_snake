@@ -55,15 +55,52 @@ let inputQueue = []; // Buffer inputs to prevent self-collision on quick turns
 document.addEventListener('keydown', (e) => {
     if (!state.isRunning) return;
     
-    // Prevent default scrolling for arrow keys
-    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.code) > -1) {
+    const code = e.code;
+    const key = e.key.toLowerCase();
+
+    // Prevent default scrolling for arrow keys and Space
+    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight", "Space"].indexOf(code) > -1) {
         e.preventDefault();
     }
 
-    const key = e.key;
-    // Add to queue
-    inputQueue.push(key);
+    // WASD Support
+    if (code === 'KeyW' || key === 'w') inputQueue.push('ArrowUp');
+    else if (code === 'KeyS' || key === 's') inputQueue.push('ArrowDown');
+    else if (code === 'KeyA' || key === 'a') inputQueue.push('ArrowLeft');
+    else if (code === 'KeyD' || key === 'd') inputQueue.push('ArrowRight');
+    else if (code.startsWith('Arrow')) inputQueue.push(code);
 });
+
+// --- Mobile Touch Controls ---
+let touchStartX = 0;
+let touchStartY = 0;
+
+canvas.addEventListener('touchstart', (e) => {
+    touchStartX = e.changedTouches[0].screenX;
+    touchStartY = e.changedTouches[0].screenY;
+    e.preventDefault(); // Stop scrolling
+}, {passive: false});
+
+canvas.addEventListener('touchend', (e) => {
+    const touchEndX = e.changedTouches[0].screenX;
+    const touchEndY = e.changedTouches[0].screenY;
+    
+    const dx = touchEndX - touchStartX;
+    const dy = touchEndY - touchStartY;
+    
+    if (Math.abs(dx) > Math.abs(dy)) {
+        // Horizontal Swipe
+        if (Math.abs(dx) > 30) { // Threshold
+            inputQueue.push(dx > 0 ? 'ArrowRight' : 'ArrowLeft');
+        }
+    } else {
+        // Vertical Swipe
+        if (Math.abs(dy) > 30) {
+            inputQueue.push(dy > 0 ? 'ArrowDown' : 'ArrowUp');
+        }
+    }
+    e.preventDefault();
+}, {passive: false});
 
 function processInput() {
     if (inputQueue.length === 0) return;
@@ -94,10 +131,37 @@ function processInput() {
 
 // Removed initGame in favor of startNewGame/startLevelLogic split
 function resetSnake() {
+    // Default start
+    let startX = 5;
+    let startY = 5;
+
+    // Check if default position collides with obstacles (now that levels are loaded first)
+    // We check 3 vertical spots since snake is length 3
+    if (isPositionOccupied(startX, startY) || isPositionOccupied(startX, startY+1) || isPositionOccupied(startX, startY+2)) {
+        // Try center
+        if (!isPositionOccupied(15, 15) && !isPositionOccupied(15, 16) && !isPositionOccupied(15, 17)) {
+            startX = 15; startY = 15;
+        } else {
+             // Find any safe spot
+             let found = false;
+             for (let x = 2; x < TILE_COUNT - 2; x++) {
+                for (let y = 2; y < TILE_COUNT - 5; y++) {
+                    if (!isPositionOccupied(x, y) && !isPositionOccupied(x, y+1) && !isPositionOccupied(x, y+2)) {
+                        startX = x;
+                        startY = y;
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) break;
+            }
+        }
+    }
+
     state.snake = [
-        { x: 5, y: 5 },
-        { x: 5, y: 6 },
-        { x: 5, y: 7 }
+        { x: startX, y: startY },
+        { x: startX, y: startY + 1 },
+        { x: startX, y: startY + 2 }
     ];
     state.velocity = { x: 0, y: -1 };
     state.foodEaten = 0;
@@ -229,30 +293,42 @@ function loadLevel(levelIndex) {
     }
 }
 
+// Helper to check if position is occupied
+function isPositionOccupied(x, y) {
+    // Check obstacles
+    for (let obs of state.obstacles) {
+        if (obs.x === x && obs.y === y) return true;
+    }
+    // Check snake
+    for (let segment of state.snake) {
+        if (segment.x === x && segment.y === y) return true;
+    }
+    return false;
+}
+
 function placeFood() {
     let valid = false;
-    while (!valid) {
-        state.food = {
-            x: Math.floor(Math.random() * TILE_COUNT),
-            y: Math.floor(Math.random() * TILE_COUNT)
-        };
+    let attempts = 0;
+    while (!valid && attempts < 500) {
+        const x = Math.floor(Math.random() * TILE_COUNT);
+        const y = Math.floor(Math.random() * TILE_COUNT);
         
-        valid = true;
-        // Check collision with snake
-        for (let segment of state.snake) {
-            if (segment.x === state.food.x && segment.y === state.food.y) {
-                valid = false;
-                break;
-            }
+        if (!isPositionOccupied(x, y)) {
+            state.food = { x, y };
+            valid = true;
         }
-        // Check collision with obstacles
-        if (valid) {
-            for (let obs of state.obstacles) {
-                if (obs.x === state.food.x && obs.y === state.food.y) {
-                    valid = false;
-                    break;
-                }
-            }
+        attempts++;
+    }
+    
+    // Fallback: Scan grid if random fails
+    if (!valid) {
+        for (let x = 0; x < TILE_COUNT; x++) {
+             for (let y = 0; y < TILE_COUNT; y++) {
+                 if (!isPositionOccupied(x, y)) {
+                     state.food = { x, y };
+                     return;
+                 }
+             }
         }
     }
 }
@@ -570,11 +646,15 @@ function retryCurrentLevel() {
 
 function startLevelLogic() {
     state.foodEaten = 0;
-    resetSnake();
     state.particles = [];
     inputQueue = [];
     
+    // Load level obstacles FIRST
     loadLevel(state.level);
+    
+    // Then reset snake (so it can avoid obstacles)
+    resetSnake();
+    
     placeFood();
     
     state.isRunning = true;
