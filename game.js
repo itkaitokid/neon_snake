@@ -387,6 +387,23 @@ const startScreen = document.getElementById('start-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
 const levelUpScreen = document.getElementById('level-up-screen');
 const autoPlayBtn = document.getElementById('autoplay-btn');
+const controlButtons = document.querySelectorAll('.control-btn');
+const dirToArrow = {
+    up: 'ArrowUp',
+    down: 'ArrowDown',
+    left: 'ArrowLeft',
+    right: 'ArrowRight'
+};
+const arrowToDir = {
+    ArrowUp: 'up',
+    ArrowDown: 'down',
+    ArrowLeft: 'left',
+    ArrowRight: 'right'
+};
+const controlButtonMap = {};
+controlButtons.forEach(btn => {
+    controlButtonMap[btn.dataset.dir] = btn;
+});
 
 // --- Input Handling ---
 let inputQueue = []; // Buffer inputs to prevent self-collision on quick turns
@@ -417,13 +434,40 @@ document.addEventListener('keydown', (e) => {
     }
 
     // WASD Support
-    if (code === 'KeyW' || key === 'w') inputQueue.push('ArrowUp');
-    else if (code === 'KeyS' || key === 's') inputQueue.push('ArrowDown');
-    else if (code === 'KeyA' || key === 'a') inputQueue.push('ArrowLeft');
-    else if (code === 'KeyD' || key === 'd') inputQueue.push('ArrowRight');
-    else if (code.startsWith('Arrow')) inputQueue.push(code);
+    if (code === 'KeyW' || key === 'w') queueArrowKey('ArrowUp');
+    else if (code === 'KeyS' || key === 's') queueArrowKey('ArrowDown');
+    else if (code === 'KeyA' || key === 'a') queueArrowKey('ArrowLeft');
+    else if (code === 'KeyD' || key === 'd') queueArrowKey('ArrowRight');
+    else if (code.startsWith('Arrow')) queueArrowKey(code);
 });
 
+controlButtons.forEach(btn => {
+    btn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        enqueueDirection(btn.dataset.dir);
+    }, { passive: false });
+    btn.addEventListener('click', () => {
+        enqueueDirection(btn.dataset.dir);
+    });
+});
+
+function enqueueDirection(dir) {
+    queueArrowKey(dirToArrow[dir]);
+}
+
+function queueArrowKey(arrowKey) {
+    if (!state.isRunning || !arrowKey) return;
+    inputQueue.push(arrowKey);
+    highlightControlButton(arrowKey);
+}
+
+function highlightControlButton(arrowKey) {
+    controlButtons.forEach(btn => btn.classList.remove('active'));
+    const dir = arrowToDir[arrowKey];
+    if (dir && controlButtonMap[dir]) {
+        controlButtonMap[dir].classList.add('active');
+    }
+}
 // --- Mobile Touch Controls ---
 let touchStartX = 0;
 let touchStartY = 0;
@@ -1131,6 +1175,7 @@ function update(currentTime) {
     const autoMove = getAutoPlayMove();
     if (autoMove) {
         inputQueue = [autoMove];
+        highlightControlButton(autoMove);
     }
     
     processInput();
