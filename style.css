@@ -39,7 +39,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    width: 640px; /* Slightly wider than canvas */
+    width: min(90vw, 640px); /* Responsive width */
     background: #111;
     padding: 15px 30px;
     border-radius: 10px;
@@ -71,6 +71,7 @@ body {
 
 .game-container {
     position: relative;
+    width: min(92vw, 640px);
     box-shadow: 0 0 50px rgba(0, 255, 136, 0.1);
     border: 20px solid #111; /* Bezel */
     border-radius: 10px;
@@ -86,8 +87,8 @@ canvas {
         linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
     background-size: 20px 20px;
     box-shadow: inset 0 0 50px #000; /* Inner vignette */
-    width: clamp(280px, 85vw, 600px);
-    height: clamp(280px, 85vw, 600px);
+    width: 100%;
+    max-width: 600px;
     aspect-ratio: 1 / 1;
 }
 
@@ -237,5 +238,65 @@ h1 {
         width: 100%;
         max-width: 220px;
         text-align: center;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 10px 0 60px;
+        min-height: 100vh;
+        height: auto;
+        align-items: flex-start;
+        overflow-y: auto;
+        perspective: none;
+    }
+    .game-wrapper {
+        gap: 10px;
+        width: 100%;
+        padding: 0 10px;
+        transform: none;
+    }
+    .hud-panel {
+        width: 100%;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px 14px;
+    }
+    .score-box,
+    .level-box {
+        width: 100%;
+        font-size: 1rem;
+        padding: 8px 12px;
+        min-width: auto;
+    }
+    .game-container {
+        width: 100%;
+        border-width: 8px;
+    }
+    canvas {
+        max-width: none;
+    }
+    .controls-hint {
+        width: 100%;
+        font-size: 0.8rem;
+        text-align: center;
+        align-items: center;
+    }
+    h1 {
+        font-size: 2rem;
+        text-align: center;
+        margin-bottom: 0.8rem;
+    }
+    .btn {
+        width: 100%;
+        padding: 12px;
+        font-size: 1rem;
+    }
+    .btn-group {
+        flex-direction: column;
+        width: 100%;
+    }
+    .btn-group .btn {
+        width: 100%;
     }
 }
