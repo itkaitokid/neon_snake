@@ -114,6 +114,7 @@
             const closeBtn = document.getElementById('videoCloseBtn');
             const resizer = document.getElementById('videoResizer');
             if (!popup || !header || !minimizeBtn || !closeBtn) return;
+            let dragOffset = { x: 0, y: 0 };
             
             let offsetX = 0;
             let offsetY = 0;
@@ -127,6 +128,7 @@
                 const clientY = event.clientY ?? (event.touches && event.touches[0].clientY);
                 offsetX = clientX - rect.left;
                 offsetY = clientY - rect.top;
+                dragOffset = { ...popup.getBoundingClientRect() };
                 document.addEventListener('mousemove', onDrag);
                 document.addEventListener('mouseup', endDrag);
                 document.addEventListener('touchmove', onDrag, { passive: false });
@@ -146,6 +148,8 @@
                 popup.style.top = `${nextY}px`;
                 popup.style.right = 'auto';
                 popup.style.bottom = 'auto';
+                popup.dataset.dragX = nextX;
+                popup.dataset.dragY = nextY;
             };
             
             const endDrag = () => {
@@ -164,6 +168,8 @@
                 popup.style.top = '';
                 popup.style.right = '';
                 popup.style.bottom = '';
+                delete popup.dataset.dragX;
+                delete popup.dataset.dragY;
             };
 
             minimizeBtn.addEventListener('click', () => {
@@ -173,6 +179,10 @@
                     resetPopupPosition();
                     popup.style.width = '';
                     popup.style.height = '';
+                    popup.style.transform = '';
+                } else if (popup.dataset.dragX && popup.dataset.dragY) {
+                    popup.style.left = `${popup.dataset.dragX}px`;
+                    popup.style.top = `${popup.dataset.dragY}px`;
                 }
             });
             

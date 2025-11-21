@@ -40,8 +40,7 @@ body {
 
 .video-popup {
     position: fixed;
-    top: 20px;
-    right: 20px;
+    inset: 20px auto auto 20px;
     width: clamp(240px, 28vw, 360px);
     min-width: 160px;
     max-width: min(520px, calc(100vw - 40px));
@@ -360,14 +359,14 @@ h1 {
         gap: 12px;
     }
     .video-popup {
-        width: clamp(220px, 55vw, 280px);
-        top: 12px;
-        right: 12px;
+        inset: 12px auto auto 12px;
+        width: clamp(210px, 60vw, 270px);
+        max-width: calc(100vw - 24px);
     }
     .video-popup.pip-mode {
-        width: clamp(160px, 40vw, 210px);
-        bottom: 12px;
-        right: 12px;
+        width: clamp(150px, 38vw, 200px);
+        inset: auto 12px 12px auto;
+        max-width: calc(100vw - 24px);
     }
     .hud-panel {
         width: 90vw;
@@ -442,17 +441,14 @@ h1 {
         min-height: 100vh;
     }
     .video-popup {
-        width: min(92vw, 260px);
-        right: 4vw;
-        left: auto;
-        top: 12px;
-        bottom: auto;
+        inset: 10px auto auto 10px;
+        width: min(88vw, 240px);
+        max-width: calc(100vw - 20px);
     }
     .video-popup.pip-mode {
-        width: min(70vw, 200px);
-        bottom: 16px;
-        top: auto;
-        right: 4vw;
+        width: min(70vw, 190px);
+        inset: auto 10px 14px auto;
+        max-width: calc(100vw - 20px);
     }
     .video-resizer {
         width: 18px;
