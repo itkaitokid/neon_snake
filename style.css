@@ -442,19 +442,20 @@ h1 {
     }
     .video-popup {
         inset: 10px auto auto 10px;
-        width: min(88vw, 240px);
-        max-width: calc(100vw - 20px);
+        width: 240px;
+        max-width: 90vw;
     }
     .video-popup.pip-mode {
-        width: min(70vw, 190px);
-        inset: auto 10px 14px auto;
-        max-width: calc(100vw - 20px);
+        width: 180px;
+        inset: auto 10px 80px auto;
+        max-width: 60vw;
     }
     .video-resizer {
-        width: 18px;
-        height: 18px;
-        right: 4px;
-        bottom: 4px;
+        width: 24px;
+        height: 24px;
+        right: -8px;
+        bottom: -8px;
+        padding: 10px; /* Touch area */
     }
     .hud-panel {
         width: 100%;
