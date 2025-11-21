@@ -251,21 +251,21 @@ h1 {
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 8px;
+        gap: 12px;
     }
     .control-row {
         display: flex;
         justify-content: center;
-        gap: 12px;
+        gap: 16px;
     }
     .control-btn {
-        width: 56px;
-        height: 56px;
-        border-radius: 12px;
+        width: 64px;
+        height: 64px;
+        border-radius: 14px;
         background: rgba(0, 255, 136, 0.15);
         border: 1px solid var(--snake-color);
         color: var(--snake-color);
-        font-size: 1.2rem;
+        font-size: 1.35rem;
         font-family: 'Orbitron', sans-serif;
         text-transform: uppercase;
     }
@@ -369,9 +369,9 @@ h1 {
         padding-bottom: 20px;
     }
     .control-btn {
-        width: 60px;
-        height: 60px;
-        font-size: 1.5rem; /* Bigger arrows */
+        width: 72px;
+        height: 72px;
+        font-size: 1.7rem; /* Bigger arrows */
         opacity: 0.8; /* See through slightly */
     }
 }

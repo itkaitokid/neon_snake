@@ -9,6 +9,9 @@ const SCORE_GROWTH_BASE = 1.5;
 const SCORE_BASE_SCALE = 0.19;
 const HUNGER_INTERVAL = 5; // seconds without eating
 const HUNGER_SPEED_STEP = 1; // additional speed per interval
+const BASE_LEVEL_SPEED = 5;
+const LEVEL_SPEED_STEP_INTERVAL = 4;
+const MAX_LEVEL_SPEED = 20;
 const HUNGER_FIB_SEQUENCE = [1, 2, 3, 5];
 const SPECIAL_RESPAWN_INTERVAL = 10; // seconds between spawns
 const SPECIAL_LIFETIME = 5; // seconds a special food stays
@@ -69,8 +72,8 @@ const LEVELS = generateLevelConfigs(TOTAL_LEVELS);
 function generateLevelConfigs(totalLevels) {
     const configs = [];
     for (let i = 1; i <= totalLevels; i++) {
-        const baseSpeed = 8;
-        const speed = Math.min(baseSpeed + Math.floor((i - 1) / 2), 28);
+        const growthSteps = Math.floor((i - 1) / LEVEL_SPEED_STEP_INTERVAL);
+        const speed = Math.min(BASE_LEVEL_SPEED + growthSteps, MAX_LEVEL_SPEED);
         const scoreMultiplier = +(1 + (i - 1) * 0.05).toFixed(2);
         configs.push({
             speed,
@@ -900,10 +903,12 @@ function reconstructPath(key, parent) {
 
 // Helper to check if position is occupied
 function isPositionOccupied(x, y, options = {}) {
-    const { ignoreTail = false } = options;
+    const { ignoreTail = false, ignoreWalls = false } = options;
     // Check obstacles
-    for (let obs of state.obstacles) {
-        if (obs.x === x && obs.y === y) return true;
+    if (!ignoreWalls) {
+        for (let obs of state.obstacles) {
+            if (obs.x === x && obs.y === y) return true;
+        }
     }
     // Check snake
     const snakeSegments = ignoreTail ? state.snake.slice(0, -1) : state.snake;
@@ -1072,28 +1077,25 @@ function getAutoPlayMove() {
     if (!state.autoPlay) return null;
     if (!state.foods.length) return null;
     
-    if (state.wallBreakTimer && state.wallBreakTimer > 0) {
-        const wallDir = findNearestWallDirection();
-        if (wallDir) return wallDir;
-    }
+    const ignoreWalls = Boolean(state.wallBreakTimer && state.wallBreakTimer > 0);
     
-    const safeDirection = findSafeFoodDirection(true);
+    const safeDirection = findSafeFoodDirection(true, { ignoreWalls });
     if (safeDirection && !isOppositeDirection(DIRECTION_VECTORS.find(d => d.key === safeDirection))) {
         return safeDirection;
     }
     
-    let direction = findPathDirection();
+    let direction = findPathDirection({ ignoreWalls });
     if (direction && !isOppositeDirection(direction)) {
         return direction.key;
     }
-    direction = findSafeFallbackDirection();
+    direction = findSafeFallbackDirection({ ignoreWalls });
     if (direction && !isOppositeDirection(direction)) {
         return direction.key;
     }
     return null;
 }
 
-function findPathDirection() {
+function findPathDirection(options = {}) {
     if (!state.snake.length || state.foods.length === 0) return null;
     const head = state.snake[0];
     const target = getClosestFood(head);
@@ -1103,7 +1105,7 @@ function findPathDirection() {
     const queue = [{ ...head }];
     const visited = new Set([headKey]);
     const prev = new Map();
-    const blocked = buildBlockedSet(false);
+    const blocked = buildBlockedSet(false, options);
     let foundKey = null;
     
     while (queue.length > 0) {
@@ -1139,7 +1141,7 @@ function findPathDirection() {
     return null;
 }
 
-function findSafeFallbackDirection() {
+function findSafeFallbackDirection(options = {}) {
     if (!state.snake.length) return null;
     const head = state.snake[0];
     const target = getClosestFood(head) || head;
@@ -1149,7 +1151,7 @@ function findSafeFallbackDirection() {
     for (let dir of DIRECTION_VECTORS) {
         if (isOppositeDirection(dir)) continue;
         const nextPos = applyDirection(head, dir);
-        if (isPositionOccupied(nextPos.x, nextPos.y)) continue;
+        if (isPositionOccupied(nextPos.x, nextPos.y, options)) continue;
         const score = computeWrapDistance(nextPos, target);
         if (score < bestScore) {
             bestScore = score;
@@ -1208,7 +1210,7 @@ function applyHungerPenalty() {
     }
 }
 
-function findSafeFoodDirection(includeSpecial = false) {
+function findSafeFoodDirection(includeSpecial = false, options = {}) {
     if (!state.snake.length) return null;
     const head = state.snake[0];
     let candidates = [...state.foods];
@@ -1217,9 +1219,9 @@ function findSafeFoodDirection(includeSpecial = false) {
     }
     const foods = candidates.sort((a, b) => computeWrapDistance(head, a) - computeWrapDistance(head, b));
     for (let food of foods) {
-        const path = findPathToFood(food);
+        const path = findPathToFood(food, options);
         if (!path || path.length === 0) continue;
-        if (food.special || pathEnsuresEscape(path)) {
+        if (food.special || options.ignoreWalls || pathEnsuresEscape(path, options)) {
             const direction = directionFromStep(head, path[0]);
             if (direction) return direction;
         }
@@ -1227,7 +1229,7 @@ function findSafeFoodDirection(includeSpecial = false) {
     return null;
 }
 
-function findPathToFood(target) {
+function findPathToFood(target, options = {}) {
     if (!state.snake.length || !target) return null;
     const head = state.snake[0];
     const headKey = toKey(head.x, head.y);
@@ -1235,7 +1237,7 @@ function findPathToFood(target) {
     const queue = [{ ...head }];
     const visited = new Set([headKey]);
     const prev = new Map();
-    const blocked = buildBlockedSet(false);
+    const blocked = buildBlockedSet(false, options);
     
     while (queue.length) {
         const current = queue.shift();
@@ -1268,13 +1270,13 @@ function reconstructFullPath(targetKey, prev) {
     return nodes;
 }
 
-function pathEnsuresEscape(path) {
+function pathEnsuresEscape(path, options = {}) {
     if (!path || !path.length) return false;
-    if (state.wallBreakTimer && state.wallBreakTimer > 0) return true;
+    if (options.ignoreWalls || (state.wallBreakTimer && state.wallBreakTimer > 0)) return true;
     const simulated = simulatePath(path);
     if (!simulated || !simulated.length) return false;
     const head = simulated[0];
-    const open = getOpenNeighborCountCustom(head, simulated);
+    const open = getOpenNeighborCountCustom(head, simulated, options);
     return open > 0;
 }
 
@@ -1290,21 +1292,23 @@ function simulatePath(path) {
     return simSnake;
 }
 
-function getOpenNeighborCountCustom(head, snakeSegments) {
+function getOpenNeighborCountCustom(head, snakeSegments, options = {}) {
     let count = 0;
     for (let dir of DIRECTION_VECTORS) {
         const nx = (head.x + dir.x + TILE_COUNT) % TILE_COUNT;
         const ny = (head.y + dir.y + TILE_COUNT) % TILE_COUNT;
-        if (!isOccupiedCustom(nx, ny, snakeSegments)) {
+        if (!isOccupiedCustom(nx, ny, snakeSegments, options)) {
             count++;
         }
     }
     return count;
 }
 
-function isOccupiedCustom(x, y, snakeSegments) {
-    for (let obs of state.obstacles) {
-        if (obs.x === x && obs.y === y) return true;
+function isOccupiedCustom(x, y, snakeSegments, options = {}) {
+    if (!options.ignoreWalls) {
+        for (let obs of state.obstacles) {
+            if (obs.x === x && obs.y === y) return true;
+        }
     }
     for (let segment of snakeSegments) {
         if (segment.x === x && segment.y === y) return true;
@@ -1382,66 +1386,11 @@ function getClosestFood(origin) {
     return closest;
 }
 
-function findNearestWallDirection() {
-    if (!state.snake.length || !state.obstacles.length) return null;
-    const head = state.snake[0];
-    let bestDir = null;
-    let bestDist = Infinity;
-    
-    for (let wall of state.obstacles) {
-        const dist = computeWrapDistance(head, wall);
-        if (dist > bestDist) continue;
-        
-        const path = findPathToWall(head, wall);
-        if (!path || !path.length) continue;
-        
-        const nextStep = path[0];
-        if (!nextStep) continue;
-        if (isSnakeOccupying(nextStep.x, nextStep.y)) continue;
-        
-        const dirKey = directionFromStep(head, nextStep);
-        if (!dirKey) continue;
-        const dirObj = DIRECTION_VECTORS.find(d => d.key === dirKey);
-        if (!dirObj) continue;
-        if (isOppositeDirection(dirObj)) continue;
-        
-        bestDist = dist;
-        bestDir = dirKey;
-    }
-    return bestDir;
-}
-
-function findPathToWall(start, targetWall) {
-    const headKey = toKey(start.x, start.y);
-    const targetKey = toKey(targetWall.x, targetWall.y);
-    const queue = [{ ...start }];
-    const visited = new Set([headKey]);
-    const prev = new Map();
-    const blocked = buildBlockedSet(false);
-    blocked.delete(targetKey);
-    
-    while (queue.length) {
-        const current = queue.shift();
-        const currentKey = toKey(current.x, current.y);
-        if (currentKey === targetKey) {
-            return reconstructFullPath(targetKey, prev);
-        }
-        for (let dir of DIRECTION_VECTORS) {
-            const neighbor = applyDirection(current, dir);
-            const key = toKey(neighbor.x, neighbor.y);
-            if (visited.has(key)) continue;
-            if (blocked.has(key) && key !== targetKey) continue;
-            visited.add(key);
-            prev.set(key, { from: currentKey, position: neighbor });
-            queue.push(neighbor);
-        }
-    }
-    return null;
-}
-
-function buildBlockedSet(ignoreTail = false) {
+function buildBlockedSet(ignoreTail = false, options = {}) {
     const blocked = new Set();
-    state.obstacles.forEach(obs => blocked.add(toKey(obs.x, obs.y)));
+    if (!options.ignoreWalls) {
+        state.obstacles.forEach(obs => blocked.add(toKey(obs.x, obs.y)));
+    }
     const limit = ignoreTail ? Math.max(state.snake.length - 1, 1) : state.snake.length;
     for (let i = 1; i < limit; i++) {
         const segment = state.snake[i];
