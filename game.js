@@ -51,7 +51,7 @@ let state = {
     specialFoodTimer: 0,
     wallBreakTimer: 0,
     specialSpawnTimer: 0,
-    specialLetter: null,
+    specialLetters: [],
     letterPowerTimer: 0,
     activeLetterChar: null
 };
@@ -105,7 +105,8 @@ function getFoodGoal(levelNumber) {
 }
 
 function getSpecialLevelLetter(levelNumber = state.level) {
-    if (!levelNumber || levelNumber % 10 !== 0) return null;
+    if (!levelNumber) return null;
+    if (levelNumber < 160 && levelNumber % 10 !== 0) return null;
     if (!SPECIAL_LEVEL_LETTERS.length) return null;
     const index = (Math.floor(levelNumber / 10) - 1) % SPECIAL_LEVEL_LETTERS.length;
     return SPECIAL_LEVEL_LETTERS[index] || null;
@@ -944,7 +945,7 @@ function spawnFoodBatch() {
     state.hungerCount = 0;
     state.specialFood = null;
     state.specialFoodTimer = 0;
-    state.specialLetter = null;
+    state.specialLetters = [];
     state.letterPowerTimer = 0;
     state.activeLetterChar = null;
     for (let i = 0; i < batchSize; i++) {
@@ -953,7 +954,7 @@ function spawnFoodBatch() {
             allowDeadEnd: shouldAllowDeadEndPlacement(state.foodEaten || 0)
         });
     }
-    spawnSpecialLetterItem();
+    spawnSpecialLetterItems();
 }
 
 function spawnSingleFood(options = {}) {
@@ -1016,47 +1017,45 @@ function spawnSingleFood(options = {}) {
     }
 }
 
-function spawnSpecialLetterItem() {
+function spawnSpecialLetterItems() {
+    state.specialLetters = [];
     const letter = getSpecialLevelLetter();
-    if (!letter) {
-        state.specialLetter = null;
-        return;
-    }
-
+    if (!letter) return;
+    
+    const lettersToSpawn = state.level >= 160
+        ? [...SPECIAL_LEVEL_LETTERS]
+        : [letter];
+    
     const center = {
         x: Math.floor(TILE_COUNT / 2),
         y: Math.floor(TILE_COUNT / 2)
     };
-    if (!state.specialLetter && isValidFoodSpot(center.x, center.y, { requireReachable: true, allowDeadEnd: true })) {
-        state.specialLetter = { x: center.x, y: center.y, letter };
-        return;
-    }
     
-    const attemptPlacement = () => {
-        const x = Math.floor(Math.random() * TILE_COUNT);
-        const y = Math.floor(Math.random() * TILE_COUNT);
-        if (isValidFoodSpot(x, y, { requireReachable: true, allowDeadEnd: false })) {
-            state.specialLetter = { x, y, letter };
+    const tryPlaceAt = (letterChar, x, y) => {
+        if (isValidFoodSpot(x, y, { requireReachable: true, allowDeadEnd: true })) {
+            state.specialLetters.push({ x, y, letter: letterChar });
             return true;
         }
         return false;
     };
     
-    let placed = false;
-    for (let i = 0; i < 400 && !placed; i++) {
-        placed = attemptPlacement();
-    }
-    
-    if (!placed) {
-        for (let x = 0; x < TILE_COUNT && !placed; x++) {
-            for (let y = 0; y < TILE_COUNT && !placed; y++) {
-                if (isValidFoodSpot(x, y, { requireReachable: true, allowDeadEnd: true })) {
-                    state.specialLetter = { x, y, letter };
-                    placed = true;
-                }
+    const placeLetter = (letterChar, preferCenter = false) => {
+        if (preferCenter && tryPlaceAt(letterChar, center.x, center.y)) return;
+        
+        for (let attempt = 0; attempt < 400; attempt++) {
+            const x = Math.floor(Math.random() * TILE_COUNT);
+            const y = Math.floor(Math.random() * TILE_COUNT);
+            if (tryPlaceAt(letterChar, x, y)) return;
+        }
+        
+        for (let x = 0; x < TILE_COUNT; x++) {
+            for (let y = 0; y < TILE_COUNT; y++) {
+                if (tryPlaceAt(letterChar, x, y)) return;
             }
         }
-    }
+    };
+    
+    lettersToSpawn.forEach((char, idx) => placeLetter(char, idx === 0));
 }
 
 function addFoodToState(pos) {
@@ -1082,7 +1081,7 @@ function isValidFoodSpot(x, y, options = {}) {
     if (isPositionOccupied(x, y)) return false;
     if (state.foods.some(food => food.x === x && food.y === y)) return false;
     if (state.snake.length && state.snake[0].x === x && state.snake[0].y === y) return false;
-    if (state.specialLetter && state.specialLetter.x === x && state.specialLetter.y === y) return false;
+    if (state.specialLetters.some(letter => letter.x === x && letter.y === y)) return false;
     if (requireReachable && !isReachableFromSnake(x, y)) return false;
     if (!allowDeadEnd && isDeadEnd(x, y)) return false;
     return true;
@@ -1287,6 +1286,7 @@ function spawnLetterFoodAhead() {
     const nextPos = applyDirection(head, state.velocity);
     if (isPositionOccupied(nextPos.x, nextPos.y)) return;
     if (state.foods.some(food => food.x === nextPos.x && food.y === nextPos.y)) return;
+    if (state.specialLetters.some(letter => letter.x === nextPos.x && letter.y === nextPos.y)) return;
     state.foods.unshift({ x: nextPos.x, y: nextPos.y });
 }
 
@@ -1569,12 +1569,16 @@ function update(currentTime) {
         state.specialFood = null;
         state.specialFoodTimer = 0;
     }
-    if (state.specialLetter && head.x === state.specialLetter.x && head.y === state.specialLetter.y) {
-        ateLetter = true;
-        collectedLetterChar = state.specialLetter.letter || null;
-        createParticles(head.x * GRID_SIZE, head.y * GRID_SIZE, '#ffffff');
-        activateLetterPower(collectedLetterChar);
-        state.specialLetter = null;
+    if (state.specialLetters.length) {
+        const letterIndex = state.specialLetters.findIndex(letter => letter.x === head.x && letter.y === head.y);
+        if (letterIndex >= 0) {
+            ateLetter = true;
+            const letterInfo = state.specialLetters[letterIndex];
+            collectedLetterChar = letterInfo.letter || null;
+            createParticles(head.x * GRID_SIZE, head.y * GRID_SIZE, '#ffffff');
+            activateLetterPower(collectedLetterChar);
+            state.specialLetters.splice(letterIndex, 1);
+        }
     }
 
     const consumedSomething = willEat || ateSpecial || ateLetter;
@@ -1766,12 +1770,14 @@ function draw() {
     if (state.specialFood) {
         entities.push({ type: 'special', x: state.specialFood.x, y: state.specialFood.y });
     }
-    if (state.specialLetter) {
-        entities.push({
-            type: 'letter',
-            x: state.specialLetter.x,
-            y: state.specialLetter.y,
-            letter: state.specialLetter.letter
+    if (state.specialLetters.length) {
+        state.specialLetters.forEach(letter => {
+            entities.push({
+                type: 'letter',
+                x: letter.x,
+                y: letter.y,
+                letter: letter.letter
+            });
         });
     }
     
