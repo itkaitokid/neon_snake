@@ -106,7 +106,7 @@ function getFoodGoal(levelNumber) {
 
 function getSpecialLevelLetter(levelNumber = state.level) {
     if (!levelNumber) return null;
-    if (levelNumber < 160 && levelNumber % 10 !== 0) return null;
+    if (levelNumber < 160 && levelNumber % 10 !== 9) return null;
     if (!SPECIAL_LEVEL_LETTERS.length) return null;
     const index = (Math.floor(levelNumber / 10) - 1) % SPECIAL_LEVEL_LETTERS.length;
     return SPECIAL_LEVEL_LETTERS[index] || null;
