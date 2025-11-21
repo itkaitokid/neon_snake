@@ -10,7 +10,7 @@ const SCORE_BASE_SCALE = 0.19;
 const HUNGER_INTERVAL = 5; // seconds without eating
 const HUNGER_SPEED_STEP = 1; // additional speed per interval
 const BASE_LEVEL_SPEED = 5;
-const LEVEL_SPEED_STEP_INTERVAL = 0.5;
+const LEVEL_SPEED_GROWTH_RATE = 0.03; // ~3% per level
 const MAX_LEVEL_SPEED = 20;
 const HUNGER_FIB_SEQUENCE = [1, 2, 3, 5, 8, 13,21,34, 55];
 const SPECIAL_RESPAWN_INTERVAL = 10; // seconds between spawns
@@ -78,8 +78,11 @@ const LEVELS = generateLevelConfigs(TOTAL_LEVELS);
 function generateLevelConfigs(totalLevels) {
     const configs = [];
     for (let i = 1; i <= totalLevels; i++) {
-        const growthSteps = Math.floor((i - 1) / LEVEL_SPEED_STEP_INTERVAL);
-        const speed = Math.min(BASE_LEVEL_SPEED + growthSteps, MAX_LEVEL_SPEED);
+        const speedBoostMultiplier = Math.pow(1 + LEVEL_SPEED_GROWTH_RATE, i - 1);
+        const speed = Math.min(
+            +(BASE_LEVEL_SPEED * speedBoostMultiplier).toFixed(2),
+            MAX_LEVEL_SPEED
+        );
         const scoreMultiplier = +(1 + (i - 1) * 0.05).toFixed(2);
         configs.push({
             speed,
