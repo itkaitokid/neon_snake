@@ -5,18 +5,21 @@ const ctx = canvas.getContext('2d');
 const GRID_SIZE = 20;
 const TILE_COUNT = canvas.width / GRID_SIZE; // 30x30 grid
 const MIN_OPEN_AREA = Math.max(10, Math.floor(TILE_COUNT / 3));
-const SCORE_GROWTH_BASE = 1.5;
+const SCORE_GROWTH_BASE = 1.1;
 const SCORE_BASE_SCALE = 0.19;
 const HUNGER_INTERVAL = 5; // seconds without eating
 const HUNGER_SPEED_STEP = 1; // additional speed per interval
 const BASE_LEVEL_SPEED = 5;
-const LEVEL_SPEED_STEP_INTERVAL = 4;
+const LEVEL_SPEED_STEP_INTERVAL = 0.5;
 const MAX_LEVEL_SPEED = 20;
-const HUNGER_FIB_SEQUENCE = [1, 2, 3, 5];
+const HUNGER_FIB_SEQUENCE = [1, 2, 3, 5, 8, 13,21,34, 55];
 const SPECIAL_RESPAWN_INTERVAL = 10; // seconds between spawns
 const SPECIAL_LIFETIME = 5; // seconds a special food stays
 const WALL_BREAK_DURATION = 10; // seconds of wall breaking
 const AUTO_RETRY_DELAY = 600; // ms before auto-restarting in auto play
+const SPECIAL_LEVEL_MESSAGE = 'I LOVE YOU NHU KIEN';
+const SPECIAL_LEVEL_LETTERS = SPECIAL_LEVEL_MESSAGE.replace(/\s+/g, '').split('');
+const LETTER_POWER_DURATION = 10; // seconds of front-food buff
 
 const COLORS = {
     snakeHead: '#00ff88',
@@ -47,7 +50,10 @@ let state = {
     specialFood: null,
     specialFoodTimer: 0,
     wallBreakTimer: 0,
-    specialSpawnTimer: 0
+    specialSpawnTimer: 0,
+    specialLetter: null,
+    letterPowerTimer: 0,
+    activeLetterChar: null
 };
 let autoRetryTimeout = null;
 
@@ -93,6 +99,13 @@ function getFoodGoal(levelNumber) {
     const mod = levelNumber % 10;
     const tens = Math.floor(levelNumber / 10);
     return Math.max(1, mod + tens);
+}
+
+function getSpecialLevelLetter(levelNumber = state.level) {
+    if (!levelNumber || levelNumber % 10 !== 0) return null;
+    if (!SPECIAL_LEVEL_LETTERS.length) return null;
+    const index = (Math.floor(levelNumber / 10) - 1) % SPECIAL_LEVEL_LETTERS.length;
+    return SPECIAL_LEVEL_LETTERS[index] || null;
 }
 
 function getFoodBatchSize(levelNumber = state.level) {
@@ -928,12 +941,16 @@ function spawnFoodBatch() {
     state.hungerCount = 0;
     state.specialFood = null;
     state.specialFoodTimer = 0;
+    state.specialLetter = null;
+    state.letterPowerTimer = 0;
+    state.activeLetterChar = null;
     for (let i = 0; i < batchSize; i++) {
         spawnSingleFood({
             requireReachable: true,
             allowDeadEnd: shouldAllowDeadEndPlacement(state.foodEaten || 0)
         });
     }
+    spawnSpecialLetterItem();
 }
 
 function spawnSingleFood(options = {}) {
@@ -996,6 +1013,49 @@ function spawnSingleFood(options = {}) {
     }
 }
 
+function spawnSpecialLetterItem() {
+    const letter = getSpecialLevelLetter();
+    if (!letter) {
+        state.specialLetter = null;
+        return;
+    }
+
+    const center = {
+        x: Math.floor(TILE_COUNT / 2),
+        y: Math.floor(TILE_COUNT / 2)
+    };
+    if (!state.specialLetter && isValidFoodSpot(center.x, center.y, { requireReachable: true, allowDeadEnd: true })) {
+        state.specialLetter = { x: center.x, y: center.y, letter };
+        return;
+    }
+    
+    const attemptPlacement = () => {
+        const x = Math.floor(Math.random() * TILE_COUNT);
+        const y = Math.floor(Math.random() * TILE_COUNT);
+        if (isValidFoodSpot(x, y, { requireReachable: true, allowDeadEnd: false })) {
+            state.specialLetter = { x, y, letter };
+            return true;
+        }
+        return false;
+    };
+    
+    let placed = false;
+    for (let i = 0; i < 400 && !placed; i++) {
+        placed = attemptPlacement();
+    }
+    
+    if (!placed) {
+        for (let x = 0; x < TILE_COUNT && !placed; x++) {
+            for (let y = 0; y < TILE_COUNT && !placed; y++) {
+                if (isValidFoodSpot(x, y, { requireReachable: true, allowDeadEnd: true })) {
+                    state.specialLetter = { x, y, letter };
+                    placed = true;
+                }
+            }
+        }
+    }
+}
+
 function addFoodToState(pos) {
     if (!pos) return;
     const exists = state.foods.some(food => food.x === pos.x && food.y === pos.y);
@@ -1019,6 +1079,7 @@ function isValidFoodSpot(x, y, options = {}) {
     if (isPositionOccupied(x, y)) return false;
     if (state.foods.some(food => food.x === x && food.y === y)) return false;
     if (state.snake.length && state.snake[0].x === x && state.snake[0].y === y) return false;
+    if (state.specialLetter && state.specialLetter.x === x && state.specialLetter.y === y) return false;
     if (requireReachable && !isReachableFromSnake(x, y)) return false;
     if (!allowDeadEnd && isDeadEnd(x, y)) return false;
     return true;
@@ -1210,6 +1271,22 @@ function applyHungerPenalty() {
     }
 }
 
+function activateLetterPower(letterChar) {
+    state.letterPowerTimer = LETTER_POWER_DURATION;
+    state.activeLetterChar = letterChar || null;
+    spawnLetterFoodAhead();
+}
+
+function spawnLetterFoodAhead() {
+    if (!state.snake.length) return;
+    if (!state.velocity.x && !state.velocity.y) return;
+    const head = state.snake[0];
+    const nextPos = applyDirection(head, state.velocity);
+    if (isPositionOccupied(nextPos.x, nextPos.y)) return;
+    if (state.foods.some(food => food.x === nextPos.x && food.y === nextPos.y)) return;
+    state.foods.unshift({ x: nextPos.x, y: nextPos.y });
+}
+
 function findSafeFoodDirection(includeSpecial = false, options = {}) {
     if (!state.snake.length) return null;
     const head = state.snake[0];
@@ -1352,6 +1429,12 @@ function updateSpecialTimers(deltaSeconds = 0) {
     if (state.wallBreakTimer && state.wallBreakTimer > 0) {
         state.wallBreakTimer = Math.max(state.wallBreakTimer - deltaSeconds, 0);
     }
+    if (state.letterPowerTimer && state.letterPowerTimer > 0) {
+        state.letterPowerTimer = Math.max(state.letterPowerTimer - deltaSeconds, 0);
+        if (state.letterPowerTimer === 0) {
+            state.activeLetterChar = null;
+        }
+    }
 }
 
 function maybeSpawnSpecialFood() {
@@ -1476,13 +1559,24 @@ function update(currentTime) {
 
     // Eat Food
     let ateSpecial = false;
+    let ateLetter = false;
+    let collectedLetterChar = null;
     if (state.specialFood && head.x === state.specialFood.x && head.y === state.specialFood.y) {
         ateSpecial = true;
         state.specialFood = null;
         state.specialFoodTimer = 0;
     }
+    if (state.specialLetter && head.x === state.specialLetter.x && head.y === state.specialLetter.y) {
+        ateLetter = true;
+        collectedLetterChar = state.specialLetter.letter || null;
+        createParticles(head.x * GRID_SIZE, head.y * GRID_SIZE, '#ffffff');
+        activateLetterPower(collectedLetterChar);
+        state.specialLetter = null;
+    }
 
-    if (willEat || ateSpecial) {
+    const consumedSomething = willEat || ateSpecial || ateLetter;
+    
+    if (consumedSomething) {
         const config = getLevelConfig(state.level);
         const baseScore = 10;
         const multiplier = config.scoreMultiplier || 1;
@@ -1493,8 +1587,10 @@ function update(currentTime) {
         scoreEl.innerText = formatScore(state.score);
         if (ateSpecial) {
             state.wallBreakTimer = WALL_BREAK_DURATION;
+        } else if (ateLetter) {
+            // already activated via activateLetterPower
         }
-        if (!ateSpecial && eatenFood) {
+        if (!ateSpecial && !ateLetter && eatenFood) {
             createParticles(eatenFood.x * GRID_SIZE, eatenFood.y * GRID_SIZE, COLORS.food);
             removeFood(eatenFood);
             
@@ -1516,6 +1612,10 @@ function update(currentTime) {
         }
     } else {
         state.snake.pop();
+    }
+    
+    if (state.letterPowerTimer && state.letterPowerTimer > 0) {
+        spawnLetterFoodAhead();
     }
     
     return true;
@@ -1663,6 +1763,14 @@ function draw() {
     if (state.specialFood) {
         entities.push({ type: 'special', x: state.specialFood.x, y: state.specialFood.y });
     }
+    if (state.specialLetter) {
+        entities.push({
+            type: 'letter',
+            x: state.specialLetter.x,
+            y: state.specialLetter.y,
+            letter: state.specialLetter.letter
+        });
+    }
     
     // Sort by Y, then X
     entities.sort((a, b) => (a.y - b.y) || (a.x - b.x));
@@ -1695,6 +1803,25 @@ function draw() {
             ctx.arc(px, py, 6, 0, Math.PI * 2);
             ctx.fill();
             
+        } else if (e.type === 'letter') {
+            const px = e.x * GRID_SIZE + GRID_SIZE / 2;
+            const py = e.y * GRID_SIZE + GRID_SIZE / 2;
+            const pulse = 1 + Math.sin(Date.now() / 180) * 0.08;
+            ctx.save();
+            ctx.translate(px, py);
+            ctx.scale(pulse, pulse);
+            ctx.shadowBlur = 25;
+            ctx.shadowColor = COLORS.snakeHead;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+            ctx.beginPath();
+            ctx.arc(0, 0, GRID_SIZE * 0.45, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '600 18px Orbitron';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText((e.letter || '?').toUpperCase(), 0, 2);
+            ctx.restore();
         } else if (e.type === 'snake') {
             const isHead = e.index === 0;
             const rainbowActive = state.wallBreakTimer && state.wallBreakTimer > 0;
@@ -1729,22 +1856,40 @@ function draw() {
 }
 
 function drawPowerUpTimer() {
-    if (!state.wallBreakTimer || state.wallBreakTimer <= 0) return;
-    
-    const timeLeft = Math.ceil(state.wallBreakTimer);
-    const text = `POWER UP: ${timeLeft}s`;
+    const indicators = [];
+    if (state.wallBreakTimer && state.wallBreakTimer > 0) {
+        indicators.push({
+            text: `POWER UP: ${Math.ceil(state.wallBreakTimer)}s`,
+            color: '#ff0055'
+        });
+    }
+    if (state.letterPowerTimer && state.letterPowerTimer > 0) {
+        const letterLabel = state.activeLetterChar
+            ? `LOVE ITEM (${state.activeLetterChar.toUpperCase()})`
+            : 'LOVE ITEM';
+        indicators.push({
+            text: `${letterLabel}: ${Math.ceil(state.letterPowerTimer)}s`,
+            color: COLORS.snakeHead
+        });
+    }
+    if (!indicators.length) return;
     
     ctx.save();
     ctx.font = 'bold 20px Orbitron';
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = '#ff0055';
-    
-    const scale = 1 + Math.sin(Date.now() / 120) * 0.08;
     ctx.translate(canvas.width / 2, 40);
-    ctx.scale(scale, scale);
-    ctx.fillText(text, 0, 0);
+    
+    indicators.forEach((indicator, idx) => {
+        const scale = 1 + Math.sin((Date.now() / 120) + idx) * 0.05;
+        ctx.save();
+        ctx.translate(0, idx * 26);
+        ctx.scale(scale, scale);
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = indicator.color;
+        ctx.fillText(indicator.text, 0, 0);
+        ctx.restore();
+    });
     ctx.restore();
 }
 
